@@ -1,0 +1,1608 @@
+---
+title: Applied Economics, To what extent is digital connectivity associated with within-country changes in income inequality, controlling for macroeconomic and labor market conditions?
+author: "Daniela Borja Polanco"
+date: "2025-11-08"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+
+## Instructions to Run the Analysis
+
+To reproduce the analysis in this document, please follow the steps below:
+
+**1.** First, run the R script **package_installations.R** to install all required packages.
+
+**2.** Next, run **SESSION 1 — Setup and Packages** in this R Markdown file. This section loads the necessary libraries, prepares the working environment, and loads the dataset.
+
+**3.** After the dataset has been loaded, continue executing the analysis starting from **Session 4**.
+
+```{r}
+# ============================================================================
+# Session 1: Setup and Packages
+# ============================================================================
+# Install all required packages from the script Package_Installation.R 
+# and Run it in the console 
+
+# =============================================================================
+# Core data manipulation & visualization
+# =============================================================================
+library(tidyverse)
+
+# =============================================================================
+# Data import & web
+# =============================================================================
+library(readxl)
+library(httr2)
+library(jsonlite)
+library(rvest)
+
+# =============================================================================
+# Visualization
+# =============================================================================
+library(plotly)
+library(ggplot2)
+library(reshape2)
+
+# =============================================================================
+# Panel data econometrics & fixed effects
+# =============================================================================
+library(fixest)     # feols(), feglm(), dplyr::lag 
+library(plm)        # panel FE/RE
+library(lmtest)     # hypothesis testing
+library(sandwich)   # robust / clustered SEs
+library(AER)        # IV methods
+library(estimatr)   # robust OLS
+
+# Optional causal tools (only if used)
+# library(did)
+# library(MatchIt)
+
+# =============================================================================
+# Reporting & tables
+# =============================================================================
+library(modelsummary)
+library(broom)
+library(kableExtra)
+library(rmarkdown)
+library(knitr)
+library(dplyr)
+library(tidyr)
+
+# =============================================================================
+# Data cleaning & diagnostics
+# =============================================================================
+library(janitor)
+library(skimr)
+library(corrr)
+
+# =============================================================================
+# World Bank & macro data
+# =============================================================================
+library(wbstats)
+library(WDI)
+
+# ============================================================================
+# Load common estimation sample (CSV version)
+# ============================================================================
+
+panel_estimation_sample <- read.csv(
+  "panel_data_2005_2024.csv",
+  stringsAsFactors = FALSE
+)
+
+
+```
+
+## Session 2: Load Data sets
+
+```{r}
+# =============================================================================
+# Session 2: Load Datasets
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# 1. Inequality indicators (World Bank – WDI)
+# ---------------------------------------------------------------------------
+# Purpose:
+# - Download cross-country inequality and labor market indicators
+# - Ensure consistency in definitions and time coverage
+# - Data source: World Bank World Development Indicators (WDI)
+
+
+# Define WDI inequality indicators
+inequality_indicators <- c(
+  gini_index_0_100                = "SI.POV.GINI",
+  mean_income_bottom40_PPP        = "SI.SPR.PC40",
+  income_share_top10_pct          = "SI.DST.10TH.10",
+  poverty_headcount_2_15_pct      = "SI.POV.DDAY",
+  poverty_headcount_4_20_pct      = "SI.POV.LMIC",
+  unemployment_total_pct          = "SL.UEM.TOTL.ZS",
+  unemployment_youth_pct          = "SL.UEM.1524.ZS",
+  vulnerable_employment_pct       = "SL.EMP.VULN.ZS",
+  literacy_rate_adult_pct         = "SE.ADT.LITR.ZS",
+  mean_years_schooling_15plus_pct = "BAR.SCHL.15UP"
+)
+
+# Download inequality indicators for 2005–2024
+data_inequality_indicators <- WDI(
+  country   = "all",
+  indicator = inequality_indicators,
+  start     = 2005,
+  end       = 2024,
+  extra     = FALSE
+)
+
+# Increase timeout to avoid download interruptions
+options(timeout = 600)  # 10 minutes
+
+# Inspect data structure
+glimpse(data_inequality_indicators)
+
+
+# ----------------------------------------------------------------------------
+# 2. Digital connectivity indicators (ITU)
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Load digital connectivity indicators
+# - Data source: International Telecommunication Union (ITU)
+# - Format: Pre-processed wide dataset
+
+
+Connectivity_Indicators_data <- read.csv("Connectivity_Indicators_Wide_Final_Format.csv")
+
+# Inspect data structure
+glimpse(Connectivity_Indicators_data)
+
+
+# ----------------------------------------------------------------------------
+# 3. Macroeconomic control variables (World Bank – WDI)
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Obtain key macroeconomic controls
+# - Reduce omitted-variable bias in FE regressions
+# - Data source: World Bank World Development Indicators (WDI)
+
+
+# Define control indicators
+control_indicators <- c(
+  gdp_per_capita             = "NY.GDP.PCAP.CD",
+  gdp_growth                 = "NY.GDP.MKTP.KD.ZG",
+  inflation_consumer_prices  = "FP.CPI.TOTL.ZG"
+)
+
+# Download control variables for 2005–2024
+control_indicators_data <- WDI(
+  country   = "all",
+  indicator = control_indicators,
+  start     = 2005,
+  end       = 2024,
+  extra     = FALSE
+)
+
+
+```
+
+## Session 3 : Data Clean and Preparation
+
+```{r}
+# ==========================================================================
+# Session 3: Variable Coverage and Selection
+# ==========================================================================
+
+
+# --------------------------------------------------------------------------
+# 1. Evaluate data availability (absolute coverage)
+# --------------------------------------------------------------------------
+# Purpose:
+# - Assess the number of missing observations per variable
+# - Identify indicators with poor data availability
+
+# Inequality indicators
+colSums(is.na(data_inequality_indicators))
+
+# Connectivity indicators
+colSums(is.na(Connectivity_Indicators_data))
+
+
+# --------------------------------------------------------------------------
+# 2. Evaluate percentage of missing values (2005–2024)
+# --------------------------------------------------------------------------
+# Purpose:
+# - Quantify missingness relative to total observations
+# - Ensure suitability for fixed effects estimation
+# - Restrict analysis to the 2005–2024 period
+
+
+# -----------------------------------------------------------------------------
+# 2.1 Inequality indicators
+# -----------------------------------------------------------------------------
+data_inequality_indicators <- data_inequality_indicators %>%
+  filter(year >= 2005 & year <= 2024)
+
+total_obs_inequality <- nrow(data_inequality_indicators)
+
+percent_missing_inequality <- colSums(is.na(data_inequality_indicators)) /
+  total_obs_inequality * 100
+
+percent_missing_inequality
+
+
+# -----------------------------------------------------------------------------
+# 2.2 Connectivity indicators
+# -----------------------------------------------------------------------------
+# Fix variable names for consistency
+Connectivity_Indicators_data <- Connectivity_Indicators_data %>%
+  rename(
+    year    = Year,
+    iso3c   = ISO,
+    country = Country
+  )
+
+Connectivity_Indicators_data <- Connectivity_Indicators_data %>%
+  filter(year >= 2005 & year <= 2024)
+
+total_obs_connectivity <- nrow(Connectivity_Indicators_data)
+
+percent_missing_connectivity <- colSums(is.na(Connectivity_Indicators_data)) /
+  total_obs_connectivity * 100
+
+percent_missing_connectivity
+
+
+# -----------------------------------------------------------------------------
+# 2.3 Control variables
+# -----------------------------------------------------------------------------
+control_indicators_data <- control_indicators_data %>%
+  filter(year >= 2005 & year <= 2024)
+
+total_obs_control <- nrow(control_indicators_data)
+
+percent_missing_control <- colSums(is.na(control_indicators_data)) /
+  total_obs_control * 100
+
+percent_missing_control
+
+
+# -----------------------------------------------------------------------------
+# 3. Variable selection for fixed effects estimation
+# -----------------------------------------------------------------------------
+# Purpose:
+# - Retain variables with sufficient coverage
+# - Ensure theoretical relevance
+# - Preserve within-country variation over time
+
+
+# ----------------------------------------------------------------------------
+# 3.1 Inequality variables
+# ----------------------------------------------------------------------------
+# 1 dependent variable + labor market controls
+inequality_keep <- c(
+  "iso3c",
+  "country",
+  "year",
+  "gini_index_0_100",          # Dependent variable
+  "unemployment_total_pct",
+  "unemployment_youth_pct",
+  "vulnerable_employment_pct"
+)
+
+data_inequality_indicators <- data_inequality_indicators %>%
+  select(all_of(inequality_keep))
+
+
+# ----------------------------------------------------------------------------
+# 3.2 Connectivity variables
+# ----------------------------------------------------------------------------
+# Main connectivity indicators + robustness variable
+connectivity_keep <- c(
+  "iso3c",
+  "country",
+  "year",
+  "individuals_using_the_internet_pct",
+  "mobile_cellular_subscriptions_per_100_people",
+  "households_with_internet_access_at_home_pct"
+)
+
+Connectivity_Indicators_data <- Connectivity_Indicators_data %>%
+  select(all_of(connectivity_keep))
+
+
+```
+
+**Variable Selection Criteria for Fixed Effects Panel Models**
+
+Data availability was assessed by calculating the proportion of missing observations for each variable over the 2005–2024 period. The results revealed substantial heterogeneity in coverage across indicators. Several inequality and ICT variables exhibited extremely high levels of missingness, in some cases exceeding 90 percent of observations, rendering them unsuitable for panel estimation.
+
+The **Gini index**, while missing in approximately 73 percent of country–year observations, was retained as the dependent variable due to its central role in cross-country inequality research and the ability of fixed effects models to accommodate unbalanced panels. In contrast, indicators such as **mean income of the bottom 40 percent** and **mean years of schooling** exhibited missing rates above 90 percent and were therefore excluded to avoid excessive reductions in the estimation sample.
+
+Labor market indicators—including total **unemployment, youth** **unemployment, and vulnerable employment**—displayed comparatively strong coverage (approximately 84 percent of observations available) and were retained as controls.
+
+Among digital connectivity measures, **individuals using the Internet** and **mobile cellular subscriptions per 100 people** demonstrated strong and consistent reporting (missingness below 16 percent and 4 percent, respectively), making them suitable as key explanatory variables. Other ICT indicators exhibited sparse or discontinuous coverage and were excluded. **The share of households with Internet access at home**, with moderate coverage, was retained for robustness analysis.
+
+Macroeconomic controls (**GDP growth and inflation**) exhibited low levels of missingness and were included to mitigate omitted-variable bias.
+
+### Second Part - Panel Construction and Data Preparation
+
+```{r}
+# ============================================================================
+# Session 3 — Second Part: : Panel Construction and Data Preparation
+# ============================================================================
+
+
+
+# ----------------------------------------------------------------------------
+# 1. Merge datasets into a single macro–panel
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Combine digital connectivity, inequality, and control variables
+# - Construct a unified country–year panel dataset
+# - Preserve all connectivity observations (left join strategy)
+
+
+macro_analysis_merged <- Connectivity_Indicators_data %>%
+  left_join(data_inequality_indicators, by = c("iso3c", "year")) %>%
+  left_join(control_indicators_data,   by = c("iso3c", "year"))
+
+
+# ----------------------------------------------------------------------------
+# 1.1 — Load and prepare income group classification (World Bank)
+# ----------------------------------------------------------------------------
+# Purpose: session 7
+# - Use an external, authoritative income classification
+# - Treat income group as a time-invariant country characteristic
+
+
+income_groups <- read_xlsx(
+  "/Users/danyelabp/Desktop/Third_Semester/Applied_Economics/CLASS.xlsx"
+) %>%
+  rename(
+    iso3c = Code,
+    income_group = Income.group
+  ) %>%
+  select(iso3c, income_group)
+
+
+# ----------------------------------------------------------------------------
+# 1.2 — Merge income group classification into macro panel
+# ----------------------------------------------------------------------------
+# Purpose: session 7
+# - Add structural country characteristics early in the pipeline
+# - Ensure consistency across all future subsamples and estimations
+
+
+macro_analysis_merged <- macro_analysis_merged %>%
+  left_join(income_groups, by = "iso3c")
+
+
+# ----------------------------------------------------------------------------
+# 1.3 — Create high-income indicator (time-invariant)
+# ----------------------------------------------------------------------------
+# Purpose: session 7 
+# - Construct a simple income-based classification
+# - Facilitate later heterogeneity and interaction analyses
+
+
+macro_analysis_merged <- macro_analysis_merged %>%
+  mutate(
+    high_income = ifelse(income_group == "High income", 1, 0)
+  )
+
+
+# -----------------------------------------------------------------------------
+# 2. Clean duplicated country identifiers
+# -----------------------------------------------------------------------------
+# Purpose:
+# - Resolve duplicate country name variables created by merging
+# - Retain a single, consistent country identifier
+
+
+macro_analysis_merged <- macro_analysis_merged %>%
+  mutate(
+    country = coalesce(country, country.x, country.y)
+  ) %>%
+  select(
+    -country.x,
+    -country.y,
+    -iso2c
+  )
+
+
+# -----------------------------------------------------------------------------
+# 3. Inspect merged dataset
+# -----------------------------------------------------------------------------
+# Purpose:
+# - Verify structure, dimensions, and panel identifiers
+# - Detect obvious inconsistencies prior to cleaning
+
+
+glimpse(macro_analysis_merged)
+summary(macro_analysis_merged)
+head(macro_analysis_merged)
+
+macro_analysis_merged %>% count(year)
+macro_analysis_merged %>% count(iso3c)
+
+
+# ----------------------------------------------------------------------------
+# 4. Panel filtering and country validation
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Restrict analysis to the 2005–2024 period
+# - Retain only valid countries
+# - Ensure sufficient within-country observations for FE estimation
+
+
+options(scipen = 999)
+
+valid_iso3 <- unique(data_inequality_indicators$iso3c)
+
+macro_analysis_clean <- macro_analysis_merged %>%
+  filter(year >= 2005 & year <= 2024) %>%
+  filter(iso3c %in% valid_iso3) %>%
+  group_by(iso3c) %>%
+  filter(n() >= 10) %>%        # Minimum 10 years per country
+  ungroup()
+
+
+# ----------------------------------------------------------------------------
+# 5. Missing value assessment (2005–2024)
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Quantify missingness in the cleaned panel
+# - Confirm suitability for FE estimation
+
+
+colSums(is.na(macro_analysis_clean))
+n_total <- nrow(macro_analysis_clean)
+
+
+# ----------------------------------------------------------------------------
+# 6. Gini index availability check
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Assess feasibility of using Gini as dependent variable
+# - Report availability and missingness rates
+
+
+total_obs <- nrow(macro_analysis_clean)
+
+missing_gini   <- sum(is.na(macro_analysis_clean$gini_index_0_100))
+available_gini <- sum(!is.na(macro_analysis_clean$gini_index_0_100))
+
+missing_pct   <- missing_gini / total_obs * 100
+available_pct <- available_gini / total_obs * 100
+
+cat("Total observations in panel:", total_obs, "\n")
+cat("Gini index available:", available_gini, "\n")
+cat("Gini index missing :", missing_gini, "\n")
+cat("Percent available:", round(available_pct, 2), "%\n")
+cat("Percent missing :", round(missing_pct, 2), "%\n")
+
+
+# ----------------------------------------------------------------------------
+# 7. Panel structure diagnostics
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Verify time and country balance
+# - Inspect distribution of observations per unit
+
+
+glimpse(macro_analysis_clean)
+
+macro_analysis_clean %>% count(year)
+macro_analysis_clean %>% count(iso3c)
+
+macro_analysis_clean %>%
+  count(iso3c) %>%
+  arrange(n)
+
+
+# ----------------------------------------------------------------------------
+# 8. Resolve duplicate country–year observations
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Handle duplicated rows for specific countries (PRI, SOM)
+# - Retain observation with the fewest missing values
+
+
+macro_analysis_clean <- macro_analysis_clean %>%
+  group_by(iso3c, year) %>%
+  mutate(na_count = rowSums(is.na(across(everything())))) %>%
+  filter(
+    !(iso3c %in% c("PRI", "SOM")) |
+      na_count == min(na_count)
+  ) %>%
+  ungroup() %>%
+  select(-na_count)
+
+
+```
+
+**Panel Construction and Data Preparation** A unified macro–panel dataset was constructed by merging the digital connectivity, inequality, and macroeconomic control datasets using ISO3 country codes and year as common identifiers. A left-join strategy was employed, using the connectivity dataset as the base sample in order to preserve all available observations for the key explanatory variables.
+
+Following the merge, variable names were standardized and duplicate country identifiers generated during the joining process were consolidated to ensure a single, consistent country variable. The merged dataset was inspected to verify its structure, country–year coverage, and overall dimensional consistency.
+
+Given that many connectivity indicators exhibit consistent reporting only after the early 2000s, the analysis period was restricted to 2005–2024 to ensure meaningful temporal coverage. The sample was further restricted to countries with valid ISO3 identifiers appearing in the World Bank dataset and with at least ten years of observations. The minimum time threshold ensures sufficient within-country variation for fixed effects estimation while avoiding the inclusion of countries with only sporadic observations.
+
+The resulting panel is unbalanced, reflecting differences in reporting frequency across countries and variables. An unbalanced structure was deliberately preserved to retain the maximum amount of available information, consistent with standard practice in empirical macroeconomic panel research.
+
+Finally, duplicate country–year observations identified for specific cases were resolved by retaining the observation containing the fewest missing values, thereby maximizing data completeness while preserving unique country–year entries.
+
+### Third Part - Common Estimation Sample and Reproducibility
+
+```{r}
+# ============================================================================
+# SESSION 3 — Third Part: Common Estimation Sample and Control Selection
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Purpose:
+# - Define a common estimation sample to ensure identical observations
+#   across all regression specifications 
+# - Explicitly exclude GDP per capita to avoid redundancy in fixed effects
+#   models 
+# ----------------------------------------------------------------------------
+
+estimation_sample <- macro_analysis_clean %>%
+  filter(
+    !is.na(gini_index_0_100),                        # Dependent variable
+    !is.na(individuals_using_the_internet_pct),      # Main regressor
+    !is.na(unemployment_total_pct),
+    !is.na(unemployment_youth_pct),
+    !is.na(vulnerable_employment_pct),
+    !is.na(mobile_cellular_subscriptions_per_100_people),
+    !is.na(households_with_internet_access_at_home_pct),
+    !is.na(gdp_growth),
+    !is.na(inflation_consumer_prices)
+  ) %>%
+  select(
+    -gdp_per_capita                                  # Dropped by design
+  )
+
+
+# ----------------------------------------------------------------------------
+# Sanity checks: these numbers must remain constant across all regressions
+# ----------------------------------------------------------------------------
+
+nrow(estimation_sample)
+length(unique(estimation_sample$iso3c))
+length(unique(estimation_sample$year))
+
+
+# ----------------------------------------------------------------------------
+# Save common estimation sample (frozen dataset)
+# ----------------------------------------------------------------------------
+write.csv(
+  estimation_sample,
+  "panel_data_2005_2024.csv",
+  row.names = FALSE
+)
+
+# ============================================================================
+# Load common estimation sample (CSV version)
+# ============================================================================
+
+panel_estimation_sample <- read.csv(
+  "panel_data_2005_2024.csv",
+  stringsAsFactors = FALSE
+)
+
+
+```
+
+**Common Estimation Sample and Reproducibility** All regression specifications are estimated on a common sample constructed from the cleaned macro–panel dataset. Observations were retained only if non-missing values were available for the dependent variable (Gini index), the main digital connectivity indicators, labor market controls, and macroeconomic variables. This complete-case restriction ensures that differences across model specifications reflect econometric design choices rather than changes in sample composition.
+
+The resulting estimation sample consists of 1,404 country–year observations, covering 153 countries over the period 2005–2024. Defining a common sample prior to estimation guarantees strict comparability across pooled OLS and fixed effects specifications.
+
+Macroeconomic controls are included to mitigate omitted-variable bias arising from time-varying economic conditions. GDP growth captures short-run macroeconomic dynamics that may influence income distribution, while inflation controls for price instability. GDP per capita in levels is excluded from the baseline specification. Although income level is theoretically relevant, long-run differences in development across countries are absorbed by country fixed effects, and GDP per capita is highly persistent over time. Including it alongside fixed effects may therefore introduce multicollinearity and complicate interpretation without adding substantial identifying variation.
+
+To ensure full reproducibility, the final estimation dataset was exported and stored as a fixed (“frozen”) panel file. Since the World Bank World Development Indicators database is periodically updated—through revisions to historical values and additions of newly reported observations—the number of available country–year observations may change when the script is re-executed in the future. Freezing the estimation sample guarantees that all reported results are based on a stable and replicable dataset.
+
+## Session 4: Descriptive Statistics
+
+```{r, figures-side, fig.show="hold", out.width="50%"}
+# ============================================================================
+# SECTION 4 — Correlation Matrix, Descriptive Statistics and Trends
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Rename variables for table
+# ----------------------------------------------------------------------------
+
+nice_names <- c(
+  gini_index_0_100 = "Gini index (0–100)",
+  individuals_using_the_internet_pct = "Internet use (%)",
+  unemployment_total_pct = "Unemployment (%)",
+  unemployment_youth_pct = "Youth unemployment (%)",
+  vulnerable_employment_pct = "Vulnerable employment (%)",
+  mobile_cellular_subscriptions_per_100_people = "Mobile subscriptions",
+  households_with_internet_access_at_home_pct = "Internet at home (%)",
+  gdp_growth = "GDP growth (%)",
+  inflation_consumer_prices = "Inflation (%)"
+)
+
+
+#----------------------------------------------------------------------------
+# Correlation Matrix
+#----------------------------------------------------------------------------
+
+#Create clean numeric dataset 
+vars_corr <- data.frame(
+  gini_index_0_100 = as.numeric(panel_estimation_sample$gini_index_0_100),
+  individuals_using_the_internet_pct = as.numeric(panel_estimation_sample$individuals_using_the_internet_pct),
+  unemployment_total_pct = as.numeric(panel_estimation_sample$unemployment_total_pct),
+  unemployment_youth_pct = as.numeric(panel_estimation_sample$unemployment_youth_pct),
+  vulnerable_employment_pct = as.numeric(panel_estimation_sample$vulnerable_employment_pct),
+  mobile_cellular_subscriptions_per_100_people = as.numeric(panel_estimation_sample$mobile_cellular_subscriptions_per_100_people),
+  households_with_internet_access_at_home_pct = as.numeric(panel_estimation_sample$households_with_internet_access_at_home_pct),
+  gdp_growth = as.numeric(panel_estimation_sample$gdp_growth),
+  inflation_consumer_prices = as.numeric(panel_estimation_sample$inflation_consumer_prices)
+)
+
+#Correlation matrix 
+cor_matrix <- cor(vars_corr, use = "pairwise.complete.obs")
+
+# Rename rows and columns BEFORE melting 
+colnames(cor_matrix) <- nice_names[colnames(cor_matrix)]
+rownames(cor_matrix) <- nice_names[rownames(cor_matrix)]
+
+
+cor_matrix_round <- round(cor_matrix, 2)
+
+
+
+cor_matrix_print <- cor_matrix_round
+mode(cor_matrix_print) <- "character"
+
+
+
+cor_matrix_print[upper.tri(cor_matrix_print, diag = TRUE)] <- ""
+
+rownames(cor_matrix_print) <- rownames(cor_matrix_round) 
+
+
+knitr::kable(
+  cor_matrix_print,
+  caption = "Pearson Correlation Matrix",
+  align = "c"
+)
+
+
+#----------------------------------------------------------------------------
+# ---- Heatmap (NOW with correct names) ----
+#----------------------------------------------------------------------------
+
+cor_long <- reshape2::melt(cor_matrix)
+
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(
+    low = "#2c7bb6",
+    mid = "white",
+    high = "#d7191c",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Correlation Matrix",
+    x = "",
+    y = "",
+    fill = "Correlation"
+  )
+
+
+
+# ----------------------------------------------------------------------------
+# 1. Summary Statistics Table
+# ----------------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------------
+# Variables to summarize
+# ----------------------------------------------------------------------------
+
+vars <- c(
+  "gini_index_0_100",
+  "individuals_using_the_internet_pct",
+  "unemployment_total_pct",
+  "vulnerable_employment_pct",
+  "mobile_cellular_subscriptions_per_100_people",
+  "gdp_growth",
+  "inflation_consumer_prices"
+)
+
+# ----------------------------------------------------------------------------
+# Compute summary statistics
+# ----------------------------------------------------------------------------
+
+summary_stats <- panel_estimation_sample %>%
+  select(all_of(vars)) %>%
+  summarise(across(
+    everything(),
+    list(
+      Mean = ~mean(.x, na.rm = TRUE),
+      Median = ~median(.x, na.rm = TRUE),
+      SD = ~sd(.x, na.rm = TRUE),
+      Min = ~min(.x, na.rm = TRUE),
+      Max = ~max(.x, na.rm = TRUE),
+      N = ~sum(!is.na(.x))
+    ),
+    .names = "{.col}__{.fn}"   # safe separator
+  )) %>%
+  pivot_longer(
+    everything(),
+    names_to = c("Variable", ".value"),
+    names_sep = "__"
+  ) 
+
+
+
+# ----------------------------------------------------------------------------
+# Rename variables
+# ----------------------------------------------------------------------------
+
+summary_stats <- summary_stats %>%
+  mutate(Variable = nice_names[Variable])
+
+# ----------------------------------------------------------------------------
+# Create formatted table (DO NOT assign this)
+# ----------------------------------------------------------------------------
+
+summary_stats %>%
+  kable(
+    digits = 2,
+    caption = "Summary Statistics",
+    booktabs = TRUE   # cleaner academic style
+  ) %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover")
+  )
+
+# ============================================================================
+# Exploratory Trends by Income Group
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# 1. Compute Average Internet Use and Gini by Year and Income Group
+# ----------------------------------------------------------------------------
+
+avg_income <- panel_estimation_sample %>%
+  group_by(year, income_group) %>%
+  summarise(
+    mean_internet = mean(individuals_using_the_internet_pct, na.rm = TRUE),
+    mean_gini = mean(gini_index_0_100, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# ----------------------------------------------------------------------------
+# 2. Split income groups
+# ----------------------------------------------------------------------------
+
+high_groups <- avg_income %>%
+  filter(income_group %in% c("High income", "Upper middle income"))
+
+low_groups <- avg_income %>%
+  filter(income_group %in% c("Lower middle income", "Low income"))
+
+
+# ----------------------------------------------------------------------------
+# 3. Plot using par()
+# ----------------------------------------------------------------------------
+
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+
+
+# ---- Plot 1: Internet (High vs Upper Middle) ----
+
+plot(high_groups$year[high_groups$income_group=="High income"],
+     high_groups$mean_internet[high_groups$income_group=="High income"],
+     type="l", lwd=2,
+     xlab="Year", ylab="Internet Use (%)",
+     main="Internet Use: High vs Upper Middle",
+     cex.main=0.9,
+     ylim=range(high_groups$mean_internet))
+
+lines(high_groups$year[high_groups$income_group=="Upper middle income"],
+      high_groups$mean_internet[high_groups$income_group=="Upper middle income"],
+      lty=2, lwd=2)
+
+legend("bottomright",
+       legend=c("High income","Upper middle income"),
+       lty=c(1,2),
+       lwd=2,
+       bty="n",
+       cex=0.8)
+
+
+
+# ---- Plot 2: Internet (Lower Middle vs Low) ----
+
+plot(low_groups$year[low_groups$income_group=="Lower middle income"],
+     low_groups$mean_internet[low_groups$income_group=="Lower middle income"],
+     type="l", lwd=2,
+     xlab="Year", ylab="Internet Use (%)",
+     main="Internet Use: Lower Middle vs Low",
+     cex.main=0.9,
+     ylim=range(low_groups$mean_internet))
+
+lines(low_groups$year[low_groups$income_group=="Low income"],
+      low_groups$mean_internet[low_groups$income_group=="Low income"],
+      lty=2, lwd=2)
+
+legend("topleft",
+       legend=c("Lower middle income","Low income"),
+       lty=c(1,2),
+       lwd=2,
+       bty="n",
+       cex=0.8)
+
+
+
+# ---- Plot 3: Gini (High vs Upper Middle) ----
+
+plot(high_groups$year[high_groups$income_group=="High income"],
+     high_groups$mean_gini[high_groups$income_group=="High income"],
+     type="l", lwd=2,
+     xlab="Year", ylab="Gini Index",
+     main="Inequality: High vs Upper Middle",
+     cex.main=0.9,
+     ylim=range(high_groups$mean_gini))
+
+lines(high_groups$year[high_groups$income_group=="Upper middle income"],
+      high_groups$mean_gini[high_groups$income_group=="Upper middle income"],
+      lty=2, lwd=2)
+
+legend("topright",
+       legend=c("High income","Upper middle income"),
+       lty=c(1,2),
+       lwd=2,
+       bty="n",
+       cex=0.8)
+
+
+
+# ---- Plot 4: Gini (Lower Middle vs Low) ----
+
+plot(low_groups$year[low_groups$income_group=="Lower middle income"],
+     low_groups$mean_gini[low_groups$income_group=="Lower middle income"],
+     type="l", lwd=2,
+     xlab="Year", ylab="Gini Index",
+     main="Inequality: Lower Middle vs Low",
+     cex.main=0.9,
+     ylim=range(low_groups$mean_gini))
+
+lines(low_groups$year[low_groups$income_group=="Low income"],
+      low_groups$mean_gini[low_groups$income_group=="Low income"],
+      lty=2, lwd=2)
+
+legend("topleft",
+       legend=c("Lower middle income","Low income"),
+       lty=c(1,2),
+       lwd=2,
+       bty="n",
+       cex=0.8)
+
+```
+
+## Session 8: Robustness 2: Lagged Internet Penetration
+
+```{r}
+# ============================================================================
+# Session 8: Robustness 2 — Lagged Internet Penetration
+# ============================================================================
+# Purpose:
+# - Assess whether the relationship between internet penetration and inequality
+#   is robust to using past internet adoption
+# - Address concerns about reverse causality and delayed adjustment effects
+#
+# Econometric rationale:
+# - Current inequality may influence contemporaneous internet adoption
+# - Lagging internet penetration weakens contemporaneous feedback effects
+# - Specification structure identical to baseline model
+# ----------------------------------------------------------------------------
+
+fe_lagged <- feols(
+  gini_index_0_100 ~
+    dplyr::lag(individuals_using_the_internet_pct) +
+    vulnerable_employment_pct +
+    unemployment_total_pct +
+    gdp_growth +
+    inflation_consumer_prices |
+    iso3c + year,
+  data  = panel_estimation_sample
+)
+
+summary(fe_lagged)
+
+# ----------------------------------------------------------------------------
+# Prepare coefficient labels for table output
+# ----------------------------------------------------------------------------
+coef_map_lag <- c(
+  "dplyr::lag(individuals_using_the_internet_pct)" =
+    "Lagged Internet use t-1 (%)",
+  vulnerable_employment_pct = "Vulnerable employment (%)",
+  unemployment_total_pct    = "Unemployment (%)",
+  gdp_growth                = "GDP growth (%)",
+  inflation_consumer_prices = "Inflation (%)"
+)
+
+# ----------------------------------------------------------------------------
+# Regression table: lagged fixed effects results
+# ----------------------------------------------------------------------------
+
+modelsummary(
+  list(
+    "Two-Way Fixed Effects (Lagged Internet)" = fe_lagged
+  ),
+  coef_map = coef_map_lag,
+  title = "Outcome variable: Gini index (0–100)",
+  stars = c(
+    "*"   = 0.10,
+    "**"  = 0.05,
+    "***" = 0.01
+  ),
+  cluster = ~iso3c,
+  statistic = "std.error",
+  gof_map = c("nobs", "r2.within.adjusted"),
+  notes = c(
+    "Country and year fixed effects included.",
+    "Robust standard errors clustered at the country level.",
+    "Lagged internet penetration (t−1) is used to mitigate reverse causality."
+  )
+)
+
+```
+
+To examine whether the effect of internet use on inequality appears with a delay, a two-way fixed effects model is estimated using internet penetration from the previous year (t−1) instead of the current year. In this specification, the coefficient on lagged internet use is −0.003 and statistically insignificant.
+
+This result indicates that internet penetration in the previous year does not have a measurable effect on inequality in the current year once country and year fixed effects are included. In contrast to the baseline model—where contemporaneous internet use is negatively and significantly associated with inequality—the lagged specification does not show a persistent effect.
+
+This suggests that the relationship between internet use and inequality is mainly contemporaneous rather than delayed. In other words, increases in internet penetration appear to be associated with inequality changes within the same period, but there is no strong evidence of an additional impact in the following year.
+
+Looking at the control variables, total unemployment remains positively and statistically significantly associated with inequality. Inflation also continues to show a positive and significant relationship. GDP growth becomes positive and statistically significant in this specification. Vulnerable employment, however, is no longer statistically significant, This suggests that its relationship with inequality is weaker and less consistent than that of unemployment or inflation. It may capture more long-term differences between countries rather than short-term changes within a country from one year to the next.
+
+Overall, the lagged model suggests that while digital connectivity is associated with inequality in the same year, there is no clear evidence of a delayed effect. The absence of a significant lagged coefficient also reduces concerns that the main results are driven by simple reverse causality operating through slow adjustment over time.
+
+## Session 5: Baseline OLS Regressions
+
+```{r}
+# ============================================================================
+# Session 5 — Descriptive Pooled OLS
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Step 1: Unconditional association
+# Gini_it = β0 + β1 * InternetUse_it + ε_it
+# ----------------------------------------------------------------------------
+
+ols_descriptive <- feols(
+  gini_index_0_100 ~ individuals_using_the_internet_pct,
+  data = panel_estimation_sample,
+  subset = obs(fe_lagged)
+)
+
+summary(ols_descriptive)
+
+# ----------------------------------------------------------------------------
+# Step 2: Pooled OLS with observed controls
+# Purpose:
+# - Add labor market and macroeconomic controls
+# - Maintain same structure as baseline FE model
+# - Still pooled: no fixed effects
+# ----------------------------------------------------------------------------
+
+ols_controls <- feols(
+  gini_index_0_100 ~
+    individuals_using_the_internet_pct +
+    vulnerable_employment_pct +
+    unemployment_total_pct +
+    gdp_growth +
+    inflation_consumer_prices,
+  data = panel_estimation_sample,
+  subset = obs(fe_lagged)
+)
+
+summary(ols_controls)
+
+# ----------------------------------------------------------------------------
+# Prepare coefficient labels for table output
+# ----------------------------------------------------------------------------
+
+coef_map_ols <- c(
+  individuals_using_the_internet_pct = "Internet use (%)",
+  vulnerable_employment_pct          = "Vulnerable employment (%)",
+  unemployment_total_pct             = "Unemployment (%)",
+  gdp_growth                         = "GDP growth (%)",
+  inflation_consumer_prices          = "Inflation (%)"
+)
+
+# ----------------------------------------------------------------------------
+# Regression table: pooled OLS results
+# ----------------------------------------------------------------------------
+
+modelsummary(
+  list(
+    "(1) Pooled OLS"              = ols_descriptive,
+    "(2) Pooled OLS + Controls"   = ols_controls
+  ),
+  coef_map = coef_map_ols,
+  title = "Outcome variable: Gini index (0–100)",
+  stars = c(
+    "*"   = 0.10,
+    "**"  = 0.05,
+    "***" = 0.01
+  ),
+  cluster = ~iso3c,
+  statistic = "std.error",
+  gof_map = c("nobs", "r.squared", "adj.r.squared"),
+  notes = c(
+    "Dependent variable: Gini index (0–100).",
+    "Standard errors are heteroskedasticity-robust and clustered at the country level.",
+    "This specification does not include country or year fixed effects."
+  )
+)
+
+
+```
+
+Pooled OLS regressions are estimated as a descriptive benchmark to examine the unconditional cross-country association between digital connectivity and income inequality. These models ignore the panel structure of the data and do not control for unobserved, time-invariant country characteristics. Accordingly, the results are not interpreted causally but serve to illustrate the raw correlations present in the data. In the specification without controls, internet use is negatively and statistically significantly associated with the Gini index. The estimated coefficient suggests that higher internet penetration is associated with lower levels of income inequality in simple cross-country comparisons. After including observable labor market and macroeconomic controls, the coefficient on internet use remains negative and statistically significant, although its magnitude decreases. This attenuation indicates that part of the unconditional association reflects differences in labor market structure and macroeconomic conditions across countries. Among the control variables, vulnerable employment and total unemployment are positively and statistically significantly associated with inequality, suggesting that structurally weaker labor markets are linked to higher income dispersion. In contrast, GDP growth and inflation do not display statistically significant associations in the pooled specification. The inclusion of controls increases the explanatory power of the model, but the pooled OLS framework remains limited. Because it does not account for unobserved country-specific factors—such as institutional quality, historical inequality patterns, or structural development—these estimates may suffer from omitted variable bias. Therefore, fixed effects models are employed in subsequent sections to isolate within-country changes over time. All pooled OLS regressions are estimated using the predefined common estimation sample to ensure consistency with subsequent fixed effects models. This guarantees that differences across estimators reflect econometric methodology rather than changes in sample composition.
+
+## Session 6: Main Specification - Country and Year Fixed Effects
+
+```{r}
+# ============================================================================
+# Session 6: Main Specification — Two-Way Fixed Effects
+# ============================================================================
+# Purpose:
+# - Estimate the relationship between internet penetration and inequality
+#   using within-country variation over time
+# - Control for unobserved, time-invariant country characteristics
+# - Control for common global shocks affecting all countries in a given year
+#
+# Econometric rationale:
+# - Pooled OLS estimates may be biased due to omitted country-specific factors
+#   (e.g. institutions, geography, historical inequality patterns)
+# - Two-way fixed effects remove this source of bias by differencing out
+#   both country and year effects
+# - This specification is therefore treated as the main model for inference
+# ----------------------------------------------------------------------------
+
+fe_main <- feols(
+  gini_index_0_100 ~
+    individuals_using_the_internet_pct +
+    csw0(vulnerable_employment_pct,
+    unemployment_total_pct,
+    gdp_growth,
+    inflation_consumer_prices)|
+    iso3c + year,
+  data  = panel_estimation_sample,
+  subset = obs(fe_lagged)
+)
+
+
+summary(fe_main)
+
+# ----------------------------------------------------------------------------
+# Prepare coefficient labels for table output
+# ----------------------------------------------------------------------------
+coef_map <- c(
+  individuals_using_the_internet_pct = "Internet use (%)",
+  vulnerable_employment_pct          = "Vulnerable employment (%)",
+  unemployment_total_pct             = "Unemployment (%)",
+  gdp_growth                          = "GDP growth (%)",
+  inflation_consumer_prices           = "Inflation (%)"
+)
+# ----------------------------------------------------------------------------
+# Prepare models for table (remove auto-generated rhs labels)
+# ----------------------------------------------------------------------------
+
+fe_models <- as.list(fe_main)
+
+names(fe_models) <- c(
+  "(1) Internet only",
+  "(2) + Vulnerable employment",
+  "(3) + Unemployment",
+  "(4) + GDP growth",
+  "(5) + Inflation"
+)
+
+# ----------------------------------------------------------------------------
+# Regression table: main fixed effects results
+# ----------------------------------------------------------------------------
+
+modelsummary(
+  fe_models,
+  coef_map = coef_map,
+  title = "Outcome variable: Gini index (0–100)",
+  stars = c(
+    "*"   = 0.10,
+    "**"  = 0.05,
+    "***" = 0.01
+  ),
+  cluster = ~iso3c,
+  statistic = "std.error",
+  gof_map = c("nobs", "r2.within.adjusted"),
+  notes = c(
+    "Robust standard errors clustered at the country level.",
+    "Mobile subscriptions are measured as the number of subscriptions per 100 people."
+  )
+)
+```
+
+The two-way fixed effects results show a consistent negative relationship between internet use and income inequality within countries over time. In all versions of the model, the coefficient on internet use is negative and statistically significant at the 1 percent level. In the final model, a one–percentage-point increase in internet use is associated with a decrease of about 0.053 points in the Gini index.
+
+Although this effect may appear small, inequality typically changes slowly over time. Therefore, even modest yearly reductions can accumulate and become meaningful over longer periods. The internet coefficient remains negative and statistically significant as additional labor market and macroeconomic controls are introduced, suggesting that the relationship is not driven only by these observable factors.
+
+Regarding the control variables, total unemployment is positively and statistically significantly associated with inequality. This means that when unemployment rises within a country, inequality tends to increase. Inflation is also positively related to inequality in the most complete model. GDP growth shows a small positive association and becomes statistically significant only in the final specification.
+
+Vulnerable employment, however, is negatively associated with inequality in the fixed effects models. This means that increases in vulnerable employment within a country are linked to decreases in the Gini index during the same period. This result differs from the earlier cross-country correlation, where vulnerable employment was positively related to inequality. The difference suggests that long-term structural differences between countries are not the same as short-term changes within countries over time.
+
+Because the model includes both country and year fixed effects, the results reflect changes within countries rather than differences between countries. In other words, the negative coefficient on internet use captures how increases in internet penetration inside a country are related to changes in inequality over time.
+
+Overall, the findings indicate that rising internet use is associated with modest but statistically significant reductions in income inequality within countries. While these estimates should not be interpreted as strictly causal, the consistent negative relationship supports the idea that digital connectivity may play a role in shaping income distribution dynamics.
+
+## Session 7: Country and Year Fixed Effects - ALternative Digital MEasure
+
+```{r}
+# ============================================================================
+# Session 7: Robustness 1 — Alternative Digital Measure (Mobile Subscriptions)
+# ============================================================================
+# Purpose:
+# - Test whether the relationship between digital connectivity and inequality
+#   is robust to using an alternative proxy for digital development
+# - Replace internet use with mobile cellular subscriptions
+# - Maintain identical control structure and fixed effects specification
+#
+# Econometric rationale:
+# - Mobile subscriptions capture telecommunications penetration
+# - Allows assessment of whether results depend on broadband access
+# - Helps evaluate robustness to measurement choice
+# ----------------------------------------------------------------------------
+
+fe_mobile <- feols(
+  gini_index_0_100 ~
+    mobile_cellular_subscriptions_per_100_people +
+    csw0(vulnerable_employment_pct,
+         unemployment_total_pct,
+         gdp_growth,
+         inflation_consumer_prices) |
+    iso3c + year,
+  data  = panel_estimation_sample,
+  subset = obs(fe_lagged)
+)
+
+summary(fe_mobile)
+
+# ----------------------------------------------------------------------------
+# Prepare coefficient labels for table output
+# ----------------------------------------------------------------------------
+coef_map_mobile <- c(
+  mobile_cellular_subscriptions_per_100_people = 
+    "Mobile subscriptions (per 100 people)",
+  vulnerable_employment_pct = "Vulnerable employment (%)",
+  unemployment_total_pct    = "Unemployment (%)",
+  gdp_growth                = "GDP growth (%)",
+  inflation_consumer_prices = "Inflation (%)"
+)
+
+# ----------------------------------------------------------------------------
+# Prepare models for table
+# ----------------------------------------------------------------------------
+
+fe_mobile_models <- as.list(fe_mobile)
+
+names(fe_mobile_models) <- c(
+  "(1) Mobile only",
+  "(2) + Vulnerable employment",
+  "(3) + Unemployment",
+  "(4) + GDP growth",
+  "(5) + Inflation"
+)
+
+# ----------------------------------------------------------------------------
+# Regression table: robustness fixed effects results
+# ----------------------------------------------------------------------------
+
+modelsummary(
+  fe_mobile_models,
+  coef_map = coef_map_mobile,
+  title = "Outcome variable: Gini index (0–100)",
+  stars = c(
+    "*"   = 0.10,
+    "**"  = 0.05,
+    "***" = 0.01
+  ),
+  cluster = ~iso3c,
+  statistic = "std.error",
+  gof_map = c("nobs", "r2.within.adjusted"),
+  notes = c(
+    "Robust standard errors clustered at the country level.",
+    "Mobile subscriptions are measured as the number of subscriptions per 100 people."
+  )
+)
+
+```
+
+The fixed effects results using mobile subscriptions as the main digital variable show a negative and statistically significant relationship with income inequality. In all specifications, the coefficient on mobile subscriptions remains negative and significant at the 1 percent level. In the fully specified model, an increase of one mobile subscription per 100 people is associated with a reduction of about 0.035 points in the Gini index.
+
+This suggests that greater mobile connectivity within a country over time is linked to lower income inequality. Although the magnitude is slightly smaller than the effect estimated for internet use, the direction of the relationship is consistent. This strengthens the idea that digital connectivity more broadly (not only internet use)is associated with inequality dynamics.
+
+As in the previous specification, vulnerable employment is negatively associated with inequality within countries. Total unemployment remains positively and statistically significantly related to the Gini index, indicating that worsening labor market conditions are linked to rising inequality. Inflation is also positively associated with inequality in the final specification. GDP growth does not show a statistically significant independent effect.
+
+Because the model includes country and year fixed effects, the results reflect within-country changes over time rather than differences between countries. Therefore, the negative association between mobile connectivity and inequality captures how increases in mobile penetration within a country are related to changes in income distribution.
+
+Overall, this robustness check confirms that the negative relationship between digital connectivity and inequality is not limited to internet use alone. The consistency of the sign and significance across digital measures supports the main empirical finding.
+
+## Session 9: Interaction With Income Groups
+
+```{r}
+# ============================================================================
+# Session 9 — Heterogeneous Effects by Income Group
+# ============================================================================
+# Purpose:
+# - Examine whether the effect of internet use on inequality differs
+#   between high-income and non–high-income countries
+# - Maintain identical structure to baseline FE specification
+#
+# Interpretation:
+# - individuals_using_the_internet_pct:
+#     Effect for non–high-income countries
+# - individuals_using_the_internet_pct × high_income:
+#     Additional effect for high-income countries
+# ----------------------------------------------------------------------------
+
+fe_interaction <- feols(
+  gini_index_0_100 ~ 
+    individuals_using_the_internet_pct +
+    I(individuals_using_the_internet_pct * high_income) +
+    vulnerable_employment_pct +
+    unemployment_total_pct +
+    gdp_growth +
+    inflation_consumer_prices |
+    iso3c + year,
+  data = panel_estimation_sample,
+  subset = obs(fe_lagged)
+)
+
+summary(fe_interaction)
+
+# ----------------------------------------------------------------------------
+# Prepare coefficient labels for table output
+# ----------------------------------------------------------------------------
+coef_map_interaction <- c(
+  individuals_using_the_internet_pct =
+    "Internet use (%)",
+  "I(individuals_using_the_internet_pct * high_income)" = 
+    "Internet use × High-income",
+  vulnerable_employment_pct = "Vulnerable employment (%)",
+  unemployment_total_pct    = "Unemployment (%)",
+  gdp_growth                = "GDP growth (%)",
+  inflation_consumer_prices = "Inflation (%)"
+)
+
+# ----------------------------------------------------------------------------
+# Regression table
+# ----------------------------------------------------------------------------
+
+modelsummary(
+  list(
+    "Two-Way Fixed Effects with Interaction" = fe_interaction
+  ),
+  coef_map = coef_map_interaction,
+  title = "Outcome variable: Gini index (0–100)",
+  stars = c(
+    "*"   = 0.10,
+    "**"  = 0.05,
+    "***" = 0.01
+  ),
+  cluster = ~iso3c,
+  statistic = "std.error",
+  gof_map = c("nobs", "r2.within.adjusted"),
+  notes = c(
+    "Country and year fixed effects included.",
+    "Robust standard errors clustered at the country level.",
+    "Baseline effect refers to non–high-income countries."
+  )
+)
+
+
+```
+
+The interaction model examines whether the effect of internet use on inequality differs between high-income and non–high-income countries. The coefficient on internet use (−0.052) represents the effect for non–high-income countries. This means that in these countries, a one–percentage-point increase in internet use is associated with a decrease of about 0.052 points in the Gini index. This effect is statistically significant at the 1 percent level.
+
+The interaction term between internet use and high-income status is positive (0.045) and statistically significant. This indicates that the effect of internet use is smaller in high-income countries. To obtain the total effect for high-income countries, we add the two coefficients: −0.052 + 0.045 = −0.007.
+
+This means that in high-income countries, a one–percentage-point increase in internet use is associated with a reduction of only about 0.007 points in the Gini index. This effect is very small and economically negligible.
+
+These results suggest that internet expansion is more strongly associated with reductions in inequality in lower-income countries. In high-income countries—where internet access is already widespread—the additional impact of increasing internet use appears much more limited.
+
+Regarding the control variables, unemployment remains positively and significantly associated with inequality, meaning that increases in unemployment are linked to rising inequality. Inflation also continues to show a positive and significant relationship. Vulnerable employment is negatively and statistically significant in this model. GDP growth does not show a statistically significant effect.
+
+Overall, the interaction results suggest that digital connectivity may play a stronger role in shaping income distribution in developing or middle-income countries, while its additional effect in high-income economies is relatively small.
+
+## Session 10: Final Regression Results with Robust Country-Level Standard Errors
+
+```{r}
+
+# ============================================================================
+# SESSION 10 — Final Fixed Effects Results
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Combine final fixed effects models
+# ----------------------------------------------------------------------------
+
+final_models <- list(
+#  "(1) Baseline FE" = fe_main[[length(fe_main)]],
+  "(2) FE (Mobile Subscriptions)" = fe_mobile[[length(fe_mobile)]],
+  "(3) FE (Lagged Internet)" = fe_lagged,
+  "(4) FE (Interaction)" = fe_interaction
+)
+
+# ----------------------------------------------------------------------------
+# Final regression table
+# ----------------------------------------------------------------------------
+
+modelsummary(
+  final_models,
+
+  coef_map = c(
+    "individuals_using_the_internet_pct" =
+      "Internet use (%)",
+    "mobile_cellular_subscriptions_per_100_people" =
+      "Mobile subscriptions",
+    "dplyr::lag(individuals_using_the_internet_pct)" =
+      "Internet use (lagged, t−1)",
+    "I(individuals_using_the_internet_pct * high_income)" =
+      "Internet use × High-income",
+    "vulnerable_employment_pct" =
+      "Vulnerable employment (%)",
+    "unemployment_total_pct" =
+      "Unemployment rate (%)",
+    "gdp_growth" =
+      "GDP growth (%)",
+    "inflation_consumer_prices" =
+      "Inflation (%)"
+  ),
+
+  statistic = "std.error",
+  stars = c("*" = 0.10, "**" = 0.05, "***" = 0.01),
+  cluster = ~iso3c,
+  gof_map = c("nobs", "r2.within.adjusted"),
+
+  title = "Digital Connectivity and Income Inequality (Gini Index)",
+
+  notes = c(
+    "Dependent variable: Gini index (0–100), where higher values indicate greater income inequality.",
+    "All specifications include country and year fixed effects.",
+    "Standard errors are heteroskedasticity-robust and clustered at the country level.",
+    "Lagged internet use refers to internet penetration in year t−1.",
+    "In the interaction model, the Internet use coefficient represents the effect in non–high-income countries.",
+    "The interaction term captures the additional effect for high-income countries."
+  )
+)
+
+
+
+
+
+```
+
+In the baseline fixed effects model (Column 1), internet use is negatively and statistically significantly associated with income inequality. A one–percentage-point increase in internet penetration is associated with a reduction of approximately 0.053 points in the Gini index. This suggests that increases in internet use within a country are linked to modest reductions in inequality over time.
+
+In Column 2, mobile subscriptions are used as an alternative measure of digital connectivity. The coefficient is also negative and statistically significant. Although the magnitude (−0.035) is smaller than that of internet use, the direction of the relationship is consistent. This supports the idea that broader digital connectivity is associated with lower inequality.
+
+Column 3 introduces lagged internet use. The coefficient becomes small (−0.003) and statistically insignificant. This suggests that the relationship between internet use and inequality is mainly contemporaneous rather than delayed. In other words, increases in internet penetration appear to be associated with inequality changes within the same year, but there is no strong evidence of a one-year delayed effect.
+
+Column 4 examines whether the effect differs between high-income and non–high-income countries. The baseline internet coefficient (−0.052) reflects the effect in non–high-income countries. The interaction term is positive and statistically significant (0.045), meaning the effect is substantially smaller in high-income countries. The total effect in high-income countries is approximately −0.007, which is economically very small. This suggests that digital expansion is more strongly associated with inequality reductions in lower-income countries, where digital access may still be expanding and more transformative.
+
+Unemployment shows a strong and consistent positive relationship with inequality across all specifications. The coefficient remains stable in magnitude and highly statistically significant, suggesting that increases in unemployment within a country are closely linked to rising income inequality. The relatively small standard errors indicate that this relationship is estimated with high precision.
+
+Vulnerable employment, in contrast, is significant in most models but loses significance in the lagged specification. This suggests that its relationship with inequality is somewhat less stable and may depend on the timing structure of the model.
+
+Overall, the results consistently indicate a negative association between digital connectivity and income inequality within countries, particularly in lower-income economies. While the estimates should not be interpreted as strictly causal, the robustness across alternative digital measures and specifications strengthens the empirical evidence supporting the main research question.
+
+```{r}
+
+
+coef_data <- tidy(fe_main[[length(fe_main)]]) %>%
+  filter(term == "individuals_using_the_internet_pct") %>%
+  mutate(
+    lower = estimate - 1.96 * std.error,
+    upper = estimate + 1.96 * std.error,
+    stars = case_when(
+      p.value < 0.01 ~ "***",
+      p.value < 0.05 ~ "**",
+      p.value < 0.10 ~ "*",
+      TRUE ~ ""
+    ),
+    label = paste0(
+      sprintf("%.3f", estimate),
+      stars,
+      " (",
+      sprintf("%.3f", std.error),
+      ")"
+    ),
+    effect_10pp = estimate * 10
+  )
+
+x_min <- coef_data$lower - 0.005
+x_max <- 0.002
+
+ggplot(coef_data, aes(x = estimate, y = 1)) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 height = 0.08, size = 1.5) +
+  geom_point(size = 7) +
+  geom_text(aes(label = label),
+            nudge_y = -0.12,   # moves label BELOW the dot
+            size = 5) +
+  geom_vline(xintercept = 0,
+             linetype = "dashed",
+             color = "grey50",
+             size = 0.8) +
+  annotate("text",
+           x = mean(c(x_min, x_max)),
+           y = 1.18,
+           label = paste0(
+             "10pp ↑ Internet → ",
+             round(abs(coef_data$effect_10pp), 2),
+             " ↓ Gini"
+           ),
+           size = 6,
+           fontface = "bold") +
+  coord_cartesian(xlim = c(x_min, x_max),
+                  ylim = c(0.75, 1.25)) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(
+    subtitle = "Country and Year Fixed Effects",
+    x = "Change in Gini Index",
+    y = ""
+  ) +
+  theme_classic(base_size = 22)
+
+#-------------------------------------------------------------------------------
+
+models_compare <- list(
+  "Internet (Baseline FE)" = fe_main[[length(fe_main)]],
+  "Mobile Subscriptions" = fe_mobile[[length(fe_mobile)]],
+  "Lagged Internet (t−1)" = fe_lagged,
+  "Internet × High Income" = fe_interaction
+)
+
+robust_data <- bind_rows(lapply(names(models_compare), function(name) {
+  tidy(models_compare[[name]]) %>%
+    filter(term %in% c(
+      "mobile_cellular_subscriptions_per_100_people",
+      "dplyr::lag(individuals_using_the_internet_pct)"
+    )) %>%
+    mutate(
+      model = name,
+      lower = estimate - 1.96 * std.error,
+      upper = estimate + 1.96 * std.error,
+      stars = case_when(
+        p.value < 0.01 ~ "***",
+        p.value < 0.05 ~ "**",
+        p.value < 0.10 ~ "*",
+        TRUE ~ ""
+      ),
+      label = paste0(
+        sprintf("%.3f", estimate),
+        stars,
+        " (",
+        sprintf("%.3f", std.error),
+        ")"
+      )
+    )
+}))
+
+robust_data$model <- factor(
+  robust_data$model,
+  levels = c(
+    "Mobile Subscriptions",
+    "Lagged Internet (t−1)"
+  )
+)
+
+ggplot(robust_data, aes(x = estimate, y = model)) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 height = 0.2, size = 1.3) +
+  geom_point(size = 5) +
+  geom_text(aes(label = label),
+            vjust = 0,
+            nudge_y = 0.25,
+            size = 5) +
+  geom_vline(xintercept = 0,
+             linetype = "dashed",
+             color = "grey50",
+             size = 0.8) +
+  labs(
+    subtitle = "Country and Year Fixed Effects (Clustered SEs)",
+    x = "Change in Gini Index",
+    y = ""
+  ) +
+  theme_classic(base_size = 22)
+
+#-------------------------------------------------------------------------------
+# Extract interaction model
+int_model <- fe_interaction
+
+# Get coefficients
+b <- coef(int_model)
+vcov_mat <- vcov(int_model)
+
+# Names
+beta_int <- "individuals_using_the_internet_pct"
+beta_interact <- "I(individuals_using_the_internet_pct * high_income)"
+
+# Low-income effect (reference group)
+low_income_est <- b[beta_int]
+low_income_se  <- sqrt(vcov_mat[beta_int, beta_int])
+
+# High-income effect = beta + interaction
+high_income_est <- b[beta_int] + b[beta_interact]
+high_income_se  <- sqrt(
+  vcov_mat[beta_int, beta_int] +
+  vcov_mat[beta_interact, beta_interact] +
+  2 * vcov_mat[beta_int, beta_interact]
+)
+
+# Create data frame
+interaction_effects <- data.frame(
+  model = c("Internet (Low Income)",
+            "Internet (High Income)"),
+  estimate = c(low_income_est, high_income_est),
+  std.error = c(low_income_se, high_income_se)
+)
+
+interaction_effects <- interaction_effects %>%
+  mutate(
+    lower = estimate - 1.96 * std.error,
+    upper = estimate + 1.96 * std.error,
+    stars = case_when(
+      abs(estimate / std.error) > 2.58 ~ "***",
+      abs(estimate / std.error) > 1.96 ~ "**",
+      abs(estimate / std.error) > 1.64 ~ "*",
+      TRUE ~ ""
+    ),
+    label = paste0(
+      sprintf("%.3f", estimate),
+      stars,
+      " (",
+      sprintf("%.3f", std.error),
+      ")"
+    )
+  )
+
+# Plot
+ggplot(interaction_effects,
+       aes(x = estimate, y = model)) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 height = 0.2, size = 1.3) +
+  geom_point(size = 5) +
+  geom_text(aes(label = label),
+            nudge_y = 0.25,
+            size = 5) +
+  geom_vline(xintercept = 0,
+             linetype = "dashed",
+             color = "grey50",
+             size = 0.8) +
+  labs(
+    subtitle = "Country and Year Fixed Effects",
+    x = "Change in Gini Index",
+    y = ""
+  ) +
+  theme_classic(base_size = 22)
+
+```
