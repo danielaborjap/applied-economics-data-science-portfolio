@@ -1,0 +1,550 @@
+---
+title: "Oil Price Uncertainty in an Era of Conflict"
+subtitle: "Who Pays More? Europe vs Asia Under the Shadow of the Iran Crisis"
+author: "Daniela Borja Polanco"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{float}
+  - \usepackage{placeins}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[L]{Oil Price Uncertainty}
+  - \fancyhead[R]{Daniela Borja Polanco}
+  - \fancyfoot[C]{\thepage}
+  - \usepackage{xcolor}
+  - \definecolor{myblue}{HTML}{185FA5}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.pos = "H",
+  out.width = "100%"
+)
+
+# ── Libraries ─────────────────────────────────────────────────────────────────
+library(httr)
+library(tibble)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(gridExtra)
+library(forecast)
+library(knitr)
+library(kableExtra)
+```
+
+```{r data-pull, include=FALSE}
+# ── Pull from FRED using the official API ─────────────────────────────────────
+FRED_API_KEY <- "##"
+
+get_fred <- function(series_id, api_key, from = "2010-01-01") {
+  url <- paste0(
+    "https://api.stlouisfed.org/fred/series/observations",
+    "?series_id=", series_id,
+    "&api_key=",   api_key,
+    "&file_type=json",
+    "&observation_start=", from
+  )
+  resp <- httr::GET(url)
+  httr::stop_for_status(resp)
+  data <- httr::content(resp, as = "parsed", simplifyVector = TRUE)
+  tibble::tibble(
+    symbol = series_id,
+    date   = as.Date(data$observations$date),
+    price  = suppressWarnings(as.numeric(data$observations$value))
+  ) %>%
+    dplyr::filter(!is.na(price))
+}
+
+brent_raw <- get_fred("DCOILBRENTEU", api_key = FRED_API_KEY, from = "2010-01-01")
+dubai_raw  <- get_fred("POILDUBUSDM",  api_key = FRED_API_KEY, from = "2010-01-01")
+```
+
+```{r data-prep, include=FALSE}
+# ── Tag benchmarks ─────────────────────────────────────────────────────────────
+brent <- brent_raw %>%
+  mutate(benchmark = "Brent (Europe)", date = as.Date(date)) %>%
+  filter(!is.na(price))
+
+dubai <- dubai_raw %>%
+  mutate(benchmark = "Dubai (Asia/Japan)", date = as.Date(date)) %>%
+  filter(!is.na(price))
+
+# ── Align to monthly frequency ─────────────────────────────────────────────────
+brent_monthly <- brent %>%
+  mutate(date = floor_date(date, "month")) %>%
+  group_by(date, benchmark) %>%
+  summarise(price = mean(price, na.rm = TRUE), .groups = "drop")
+
+dubai_monthly <- dubai %>%
+  mutate(date = floor_date(date, "month"))
+
+# ── Combined tidy panel ────────────────────────────────────────────────────────
+oil_combined <- bind_rows(brent_monthly, dubai_monthly) %>%
+  arrange(date)
+
+# ── Brent-Dubai spread ─────────────────────────────────────────────────────────
+spread_df <- brent_monthly %>%
+  select(date, brent = price) %>%
+  left_join(dubai_monthly %>% select(date, dubai = price), by = "date") %>%
+  mutate(spread = brent - dubai) %>%
+  filter(!is.na(spread))
+```
+
+```{r models, include=FALSE}
+# ── Time series objects ────────────────────────────────────────────────────────
+brent_ts <- ts(brent_monthly$price,
+               start     = c(year(min(brent_monthly$date)),
+                             month(min(brent_monthly$date))),
+               frequency = 12)
+
+dubai_ts <- ts(dubai_monthly$price,
+               start     = c(year(min(dubai_monthly$date)),
+                             month(min(dubai_monthly$date))),
+               frequency = 12)
+
+# ── SES ────────────────────────────────────────────────────────────────────────
+brent_ses  <- ses(brent_ts,  h = 12)
+dubai_ses  <- ses(dubai_ts,  h = 12)
+brent_alpha <- round(brent_ses$model$par["alpha"], 4)
+dubai_alpha <- round(dubai_ses$model$par["alpha"], 4)
+
+# ── Holt damped trend ──────────────────────────────────────────────────────────
+brent_holt <- holt(brent_ts, h = 12, damped = TRUE)
+dubai_holt <- holt(dubai_ts, h = 12, damped = TRUE)
+
+# ── Model performance table ────────────────────────────────────────────────────
+model_perf <- tibble(
+  Benchmark = c("Brent (Europe)", "Brent (Europe)",
+                "Dubai (Asia/Japan)", "Dubai (Asia/Japan)"),
+  Model     = c("SES", "Holt (damped trend)", "SES", "Holt (damped trend)"),
+  Alpha     = c(brent_alpha, NA, dubai_alpha, NA),
+  RMSE      = c(
+    round(sqrt(mean(residuals(brent_ses)^2)), 3),
+    round(sqrt(mean(residuals(brent_holt)^2)), 3),
+    round(sqrt(mean(residuals(dubai_ses)^2)), 3),
+    round(sqrt(mean(residuals(dubai_holt)^2)), 3)
+  )
+)
+```
+\clearpage
+# Introduction
+
+The global oil market is one of the most geopolitically sensitive commodity markets in
+the world. Price movements are rarely driven by supply and demand alone — they respond
+sharply to conflict, sanctions, and the threat of supply disruption. The escalating
+tensions involving Iran in 2024–2025, including US-Israel military strikes and fears over
+the Strait of Hormuz, have reintroduced a level of uncertainty not seen since the 2022
+energy crisis.
+
+This report investigates a deceptively simple question: does every region of the world
+suffer equally when oil prices spike? The answer is no — and the divergence between
+European and Asian oil benchmarks is the evidence.
+
+We analyse two benchmark prices:
+
+- **Brent Crude** (DCOILBRENTEU): the European benchmark, traded on the ICE
+  exchange, priced in USD per barrel.
+- **Dubai Crude** (POILDUBUSDM): the Asian benchmark used to price roughly
+  two-thirds of Middle Eastern exports to Asia, including Japan, China, South Korea,
+  and India.
+
+Both series are retrieved directly from the FRED database (Federal Reserve Bank of
+St. Louis) using the official API — no manual CSV download required.
+
+\clearpage
+# Data
+
+```{r data-summary-table}
+summary_tbl <- oil_combined %>%
+  group_by(benchmark) %>%
+  summarise(
+    N      = n(),
+    Mean   = round(mean(price,   na.rm = TRUE), 2),
+    Median = round(median(price, na.rm = TRUE), 2),
+    Min    = round(min(price,    na.rm = TRUE), 2),
+    Max    = round(max(price,    na.rm = TRUE), 2),
+    SD     = round(sd(price,     na.rm = TRUE), 2)
+  ) %>%
+  rename(Benchmark = benchmark)
+
+kable(summary_tbl,
+      caption   = "Descriptive statistics — Brent (Europe) vs Dubai (Asia), 2010–present. All prices in USD/barrel.",
+      booktabs  = TRUE,
+      align     = "lrrrrrr",
+      col.names = c("Benchmark", "N", "Mean", "Median", "Min", "Max", "Std. Dev.")) %>%
+  kable_styling(
+    latex_options = c("striped", "hold_position", "scale_down"),
+    font_size     = 10,
+    full_width    = FALSE
+  ) %>%
+  add_header_above(c(" " = 2, "USD per barrel" = 5))
+```
+
+The dataset covers monthly oil prices from January 2010 to the present. Brent is
+originally reported at daily frequency and aggregated to monthly averages for
+comparability with the Dubai series, which is reported monthly by the IMF. The sample
+yields approximately 197 monthly observations per benchmark — sufficient for robust
+time series estimation, as forecasting models require trend identification rather than
+large cross-sectional samples.
+
+The mean price over the sample is \$78.01/bbl for Brent and \$75.91/bbl for Dubai,
+with Brent trading on average \$2.10/barrel above Dubai. However, this average masks
+substantial variation: the spread has ranged from +\$11.61/bbl (Europe paying more)
+to --\$23.57/bbl (Asia paying a severe premium), reflecting the asymmetric impact of
+geopolitical shocks on regional supply routes.
+
+\clearpage
+# Price Dynamics: Europe vs Asia
+
+## Historical Price Trajectories
+
+```{r fig1-price-trajectories, fig.cap="Monthly oil prices: Brent (Europe) vs Dubai (Asia/Japan), 2010–present. Shaded areas mark key geopolitical events. Source: FRED (EIA / IMF). Author: Daniela Borja Polanco.", fig.height=4}
+
+events <- tibble(
+  xmin  = as.Date(c("2014-06-01", "2020-01-01", "2022-02-01", "2024-04-01")),
+  xmax  = as.Date(c("2016-01-01", "2020-06-01", "2022-12-01", "2024-10-01")),
+  label = c("OPEC price war", "COVID-19\ndemand crash",
+            "Russia-Ukraine\nenergy crisis", "Iran\ntensions")
+)
+
+ggplot(oil_combined, aes(x = date, y = price, colour = benchmark)) +
+  geom_rect(data = events,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+            inherit.aes = FALSE,
+            fill = "grey90", alpha = 0.6) +
+  geom_line(linewidth = 0.7) +
+  geom_text(data = events,
+            aes(x = xmin + (xmax - xmin) / 2, y = 135, label = label),
+            inherit.aes = FALSE,
+            size = 2.2, colour = "grey40", vjust = 1, lineheight = 0.85) +
+  scale_colour_manual(values = c("Brent (Europe)"     = "#185FA5",
+                                 "Dubai (Asia/Japan)" = "#D85A30")) +
+  scale_y_continuous(labels = dollar_format(suffix = "/bbl")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title    = "Brent vs Dubai Crude Oil Prices (2010–present)",
+    subtitle = "Monthly averages in USD per barrel",
+    x        = NULL,
+    y        = "Price (USD/barrel)",
+    colour   = "Benchmark",
+    caption  = "Source: FRED (EIA / IMF). Brent = DCOILBRENTEU, Dubai = POILDUBUSDM. Author: Daniela Borja Polanco."
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(legend.position  = "bottom",
+        plot.title       = element_text(face = "bold"),
+        panel.grid.minor = element_blank())
+```
+
+The chart reveals the fundamental structure of the global oil market: **Brent and Dubai
+move almost identically most of the time**, confirming that oil is an integrated global
+commodity. When supply or demand shocks occur anywhere, both benchmarks respond
+together. The OPEC price war (2014–2016) collapsed prices from \$110 to \$30/barrel
+across both benchmarks simultaneously. The COVID-19 crash (2020) sent both to
+historic lows in a matter of weeks.
+
+The **interesting economics lies in the moments of divergence** — when one benchmark
+decouples from the other. These divergences, invisible in Figure 1 but clearly visible
+in the spread analysis below, reveal which regions bear the greater cost of geopolitical
+disruption. The sharp spike in both series at the far right (late 2025 / early 2026)
+corresponds to the most recent Iran escalation — and notably, the spread chart shows
+that Dubai spiked *more* than Brent during this episode, meaning Asia bore a
+disproportionate share of the price shock.
+
+## The Brent–Dubai Spread
+
+The spread (Brent minus Dubai) is the key analytical instrument of this report.
+
+> **Positive spread** (Brent $>$ Dubai): Europe pays more per barrel than Asia.  
+> **Negative spread** (Dubai $>$ Brent): Asia pays more per barrel than Europe.
+
+Historically Brent trades slightly above Dubai, but this relationship breaks down during
+geopolitical shocks — particularly those threatening Middle Eastern supply routes like
+the Strait of Hormuz.
+
+```{r fig2-spread, fig.cap="Brent-Dubai spread. Positive = Europe pays more. Negative = Asia pays more.", fig.height=3.5, fig.width=7}
+ggplot(spread_df, aes(x = date, y = spread)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             colour = "grey50", linewidth = 0.5) +
+  geom_line(colour = "#534AB7", linewidth = 0.7) +
+  geom_ribbon(aes(ymin = pmin(spread, 0), ymax = 0),
+              fill = "#D85A30", alpha = 0.25) +
+  geom_ribbon(aes(ymin = 0, ymax = pmax(spread, 0)),
+              fill = "#185FA5", alpha = 0.25) +
+  annotate("text", x = as.Date("2015-01-01"), y = 6,
+           label = "Europe pays more (+)", colour = "#185FA5",
+           size = 2.8, fontface = "italic") +
+  annotate("text", x = as.Date("2015-01-01"), y = -4,
+           label = "Asia pays more (-)", colour = "#D85A30",
+           size = 2.8, fontface = "italic") +
+  scale_y_continuous(labels = dollar_format(suffix = "/bbl")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title   = "Brent-Dubai Spread",
+    x       = NULL,
+    y       = "Spread (USD/barrel)",
+    caption = "Source: FRED (EIA / IMF). Author: Daniela Borja Polanco."
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(plot.title         = element_text(face = "bold"),
+        panel.grid.minor   = element_blank(),
+        plot.caption       = element_text(size = 7, hjust = 0),
+        plot.margin        = margin(5, 15, 5, 5))
+```
+
+The spread chart tells a more nuanced story than the price chart alone. For most of
+2010–2024, Europe paid a modest premium — consistent with Brent's historical role as
+the global reference price. The spread was narrow and relatively stable, rarely exceeding
+\$5/bbl in either direction.
+
+The two most dramatic exceptions are revealing. First, a brief episode around 2020
+where the spread turned sharply negative — Dubai temporarily priced above Brent — as
+COVID-19 disrupted Asian demand patterns unevenly. Second, and far more striking, the
+collapse at the right edge of the chart: in late 2025/early 2026 the spread plunged to
+nearly **--\$23/barrel**, meaning Asia was paying over \$23 more per barrel than Europe.
+This is not a marginal difference. At Japan's import volume of roughly 3 million barrels
+per day, a \$23 spread sustained over a year represents approximately **\$25 billion in
+additional annual energy costs** relative to European competitors — a macroeconomic
+shock, not a statistical artefact.
+
+\clearpage
+# Iran, the Strait of Hormuz, and Regional Exposure
+
+## Why Geography Determines Pain
+
+The Strait of Hormuz — the narrow waterway between Iran and Oman — is the most
+critical oil chokepoint in the world. Approximately 20% of global oil trade passes
+through it daily. Any military escalation involving Iran carries the risk of partial or
+full closure of the Strait, with dramatically asymmetric consequences by region:
+
+```{r table2-exposure}
+exposure <- tibble(
+  Region          = c("Japan", "South Korea", "China", "India",
+                      "Germany", "France", "United States"),
+  Benchmark       = c("Dubai", "Dubai", "Dubai/Oman", "Dubai",
+                      "Brent", "Brent", "WTI"),
+  `ME share of imports (%)` = c(90, 70, 45, 65, 30, 25, 10),
+  `Hormuz exposure`         = c("Critical", "Critical", "High",
+                                "High", "Moderate", "Moderate", "Low"),
+  `Alternative supply routes` = c("Very limited", "Very limited",
+                                   "Russia/pipeline", "Russia/Africa",
+                                   "Norway/Russia", "Norway/Algeria",
+                                   "Canada/domestic")
+)
+
+kable(exposure,
+      caption  = "Regional oil import dependence and Strait of Hormuz exposure. Source: IEA World Energy Balances; BP Statistical Review of World Energy. Author: Daniela Borja Polanco.",
+      booktabs = TRUE,
+      align    = "llcll") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down"),
+                font_size = 9) %>%
+  column_spec(4, bold = TRUE)
+```
+
+The table reveals a clear vulnerability gradient. Japan and South Korea sit at the top
+of the risk ladder: both source the overwhelming majority of their oil from the Middle
+East, and neither has a realistic alternative at scale. China and India occupy an
+intermediate position — high dependence, but with meaningful alternatives through
+Russian supply that have become more actively used since 2022. European economies,
+priced on Brent, draw primarily from the North Sea and North Africa, with the Middle
+East representing a smaller and increasingly substitutable share of supply.
+
+## Forecasting Price Paths Under Uncertainty
+
+We use Simple Exponential Smoothing (SES) and Holt's damped trend method to
+generate 12-month forecasts for both benchmarks. The confidence intervals serve as
+a quantitative measure of price risk — a wider band signals a more unpredictable
+environment.
+
+\FloatBarrier
+```{r table3-model-performance}
+kable(model_perf,
+      caption  = "Model performance — SES vs Holt (damped trend). Source: FRED (EIA / IMF). Author: Daniela Borja Polanco.",
+      booktabs = TRUE,
+      align    = "llcc",
+      na       = "—") %>%
+  kable_styling(latex_options = c("striped", "hold_position"), font_size = 10)
+```
+
+Both models return $\alpha = 0.9999$ for both benchmarks — effectively $\alpha = 1$.
+This means the optimal forecast at every point is almost entirely determined by the
+most recent price observation, with historical prices carrying negligible weight. This
+is the statistical signature of a **random walk**: oil prices are shock-driven rather
+than trend-driven, and the best prediction of tomorrow's price is today's price. This
+finding is well-established in the commodity economics literature and is consistent
+with the efficient markets hypothesis applied to oil futures.
+
+The marginal improvement of Holt over SES is minimal — less than 1% lower RMSE
+for both benchmarks — confirming that adding a trend component provides almost no
+additional forecasting power. Oil does not trend predictably; it jumps in response to
+events.
+
+```{r fig3-forecasts, fig.cap="12-month forecasts (Holt damped trend) for Brent and Dubai crude. Shaded bands = 80\\% and 95\\% prediction intervals. Source: FRED (EIA / IMF). Author: Daniela Borja Polanco.", fig.height=6}
+
+p1 <- autoplot(brent_holt) +
+  scale_y_continuous(labels = dollar_format(suffix = "/bbl")) +
+  labs(title    = "Brent Crude — Europe",
+       subtitle = paste0("Holt damped trend | α = ",
+                         round(brent_holt$model$par["alpha"], 4)),
+       x = NULL, y = "USD/barrel") +
+  theme_minimal(base_size = 9) +
+  theme(plot.title = element_text(face = "bold", colour = "#185FA5"))
+
+p2 <- autoplot(dubai_holt) +
+  scale_y_continuous(labels = dollar_format(suffix = "/bbl")) +
+  labs(title    = "Dubai Crude — Asia/Japan",
+       subtitle = paste0("Holt damped trend | α = ",
+                         round(dubai_holt$model$par["alpha"], 4)),
+       x = NULL, y = "USD/barrel") +
+  theme_minimal(base_size = 9) +
+  theme(plot.title = element_text(face = "bold", colour = "#D85A30"))
+
+grid.arrange(p1, p2, ncol = 1)
+```
+
+**Interpreting the forecasts.** The Brent forecast (top panel) projects prices around
+\$130/barrel with a wide but plausible confidence band — reflecting genuine market
+uncertainty, but anchored to a realistic price range given the recent spike.
+
+The Dubai forecast (bottom panel) requires more careful interpretation. The model
+projects prices above \$200/barrel, with an upper confidence bound approaching
+\$300/barrel. This is not a credible point forecast — it is a direct consequence of
+$\alpha = 0.9999$ combined with an extreme upward spike in the final observation.
+The model sees a sharp recent upward movement and, placing almost all weight on that
+last data point, extrapolates it mechanically forward.
+
+This should be read not as a price prediction but as a **quantification of extreme
+uncertainty**. The confidence interval is so wide it is essentially saying: *we do not
+know*. And that, in itself, is the most important finding of the forecasting exercise.
+Asian crude markets have become genuinely unforecastable under current geopolitical
+conditions. A mechanical time series model cannot distinguish between a temporary
+geopolitical spike and a structural regime change — and neither, at this moment, can
+the market.
+
+**Who bears the greatest uncertainty?** Japan and South Korea face not only higher
+expected prices but far greater price variance. With $\alpha \approx 1$, every
+geopolitical shock lands directly in the price with no dampening from historical
+averages. For an economy like Japan — where 90% of oil imports transit the Strait of
+Hormuz and there are virtually no alternative supply routes — this uncertainty is not
+an abstract statistical concept. It translates into electricity bills, manufacturing
+costs, and ultimately household purchasing power.
+
+\clearpage
+# Conclusion: Supply Routes, Vulnerability, and the Stakes of Diversification
+
+The story of oil price uncertainty under the Iran crisis is ultimately a story about
+**geography and the absence of alternatives**.
+
+Europe and Asia face the same geopolitical headlines, but they do not face the same
+economic consequences. The Brent–Dubai spread, which has swung from near-zero to
+--\$23/barrel in the space of months, tells us that when the Strait of Hormuz comes
+under threat, Asian economies absorb a shock that simply does not reach European
+ones with the same force. This asymmetry is not accidental — it is structural, built
+into decades of energy infrastructure decisions.
+
+**For Asia's most exposed economies — Japan and South Korea — the path forward is
+supply diversification, and the options are constrained.** Japan has been investing in
+liquefied natural gas (LNG) infrastructure from Australia, the United States, and
+Canada as a partial substitute for Middle Eastern crude. The US–Japan LNG
+relationship, strengthened since 2022, offers a genuine long-run alternative — but
+LNG terminals, regasification capacity, and fleet adaptation take years to build.
+In the short run, Japan remains trapped: 90% Middle East dependence is not a
+number that changes in a single policy cycle. A Hormuz closure tomorrow would
+mean an immediate supply crisis with no available substitute at scale.
+
+**South Korea is in a structurally similar position**, though its government has moved
+more aggressively toward nuclear energy as a domestic buffer. Expanding nuclear
+capacity reduces oil dependence for power generation, but transportation and
+industrial feedstocks remain tied to crude imports — and therefore to the Strait.
+
+**China has the most credible diversification story.** The Russia–China pipeline
+network, expanded since 2022 under Western sanctions pressure on Moscow, gives
+Beijing a land-based supply route entirely insulated from Hormuz risk. For China,
+the Iran crisis is a manageable disruption rather than an existential threat. This
+geopolitical reality helps explain why China has been less vocal than Japan or South
+Korea in calling for Hormuz security guarantees — it has alternatives, and those
+alternatives are actively being used.
+
+**India occupies a fascinating intermediate position.** Its heavy reliance on Middle
+Eastern crude (65%) creates structural vulnerability, but India has demonstrated
+remarkable flexibility since 2022 by absorbing large volumes of discounted Russian
+Urals crude that European buyers abandoned. India's energy pragmatism — buying
+from whoever offers the best price regardless of geopolitical alignment — gives it
+more supply resilience than the headline dependency figure suggests. However, this
+strategy depends on Russian supply remaining available and cheap, which is itself
+a geopolitical assumption.
+
+**For European economies, the Iran crisis is a risk but not a crisis.** Germany and
+France source the majority of their oil from Norway, the North Sea, Algeria, and
+increasingly the United States via LNG. The Strait of Hormuz is relevant to European
+energy security — a full closure would spike global oil prices and hurt European
+growth — but it would not trigger a supply cutoff. Europe's challenge is different:
+the legacy dependence on Russian pipeline gas, partially visible in the "Norway/Russia"
+alternative route listed for Germany, has already been disrupted by the 2022 war.
+Europe has been forced into diversification; Asia has not yet been forced, but the
+current crisis is delivering the same message.
+
+**The forecasting models make the stakes concrete.** Both benchmarks behave as
+random walks, confirming that oil prices cannot be reliably predicted — only their
+uncertainty can be quantified. The Dubai forecast's extreme upper confidence bound
+is not a price prediction; it is a measure of how severely the Asian crude market
+has been destabilised. For Japan, sitting in a country where every barrel of oil
+travels through a waterway that one nation could close, that uncertainty is not an
+abstraction. It is the price paid for having built an industrial economy on a
+foundation of imported energy with no plan B.
+
+The ultimate lesson is that supply diversification is not just an energy policy choice —
+it is a macroeconomic risk management imperative. The countries that have invested
+in alternative routes, domestic renewables, or flexible procurement strategies will
+weather the next geopolitical shock at a lower cost than those that have not. The
+spread chart in Figure 2 shows who is already paying the price for that difference.
+
+\clearpage
+# Technical Appendix
+
+## Data Sources
+
+| Series | Description | Source | Frequency |
+|--------|-------------|--------|-----------|
+| DCOILBRENTEU | Crude Oil Prices: Brent — Europe | U.S. EIA via FRED | Daily |
+| POILDUBUSDM  | Global price of Dubai Crude      | IMF via FRED      | Monthly |
+
+*Data retrieved via the FRED API (Federal Reserve Bank of St. Louis). Author of analysis and report: Daniela Borja Polanco.*
+
+## R Session Information
+
+```{r session-info}
+cat("R version:", R.version$version.string, "\n")
+cat("Key packages: httr, forecast, ggplot2, tidyverse\n")
+cat("Report generated:", format(Sys.Date(), "%d %B %Y"), "\n")
+```
+
+## SES and Holt Equations
+
+The Simple Exponential Smoothing level equation:
+
+$$\hat{y}_{t+1|t} = \alpha y_t + (1 - \alpha)\hat{y}_{t|t-1}$$
+
+For both Brent and Dubai: $\alpha = 0.9999$, confirming near-random-walk behaviour.
+
+$$\hat{y}_{t+1} = 0.9999 \cdot y_t + 0.0001 \cdot \hat{y}_t$$
+
+The Holt damped trend model additionally estimates a trend component $b_t$ with
+damping parameter $\phi$:
+
+$$\hat{y}_{t+h|t} = \ell_t + (\phi + \phi^2 + \cdots + \phi^h)b_t$$
+
+The damping parameter prevents the forecast from growing unboundedly — particularly
+important given the extreme recent spike in Dubai crude prices.
