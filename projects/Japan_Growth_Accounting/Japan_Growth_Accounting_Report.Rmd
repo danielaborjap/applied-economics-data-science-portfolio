@@ -1,0 +1,451 @@
+---
+title: "Growth Facts and Growth Accounting for Japan"
+subtitle: "Applied Macroeconomics, Empirical Project"
+author: "Daniela Borja"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    fig_caption: true
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \floatplacement{figure}{H}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 7,
+  fig.height = 4.2,
+  fig.pos = "H"
+)
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+
+theme_set(theme_minimal(base_size = 11))
+```
+
+# Introduction
+
+This project describes Japan's postwar growth experience and decomposes its
+output growth into the contributions of capital, labor, and total factor
+productivity (TFP). The aggregate analysis follows the Solow growth accounting
+framework taught in class, using the Penn World Table (PWT 11.0). The
+industry-flavored extension uses the EU KLEMS growth accounts to look at the
+composition of capital and the role of labor quality after 1995.
+
+Japan is a natural case for growth accounting because its growth rate changed so
+dramatically over time. The economy moved through a postwar miracle, a slowdown
+after the oil shocks, an asset bubble, a long stagnation known as the Lost
+Decade, and a modest recovery under Abenomics. The central question this report
+asks is simple: when growth slowed, which input slowed with it? The answer turns
+out to be mostly TFP, and the decomposition lets us say that precisely.
+
+# Data
+
+```{r load-pwt}
+pwt <- read_excel("pwt110.xlsx", sheet = "Data")
+
+jpn_pwt <- pwt %>%
+  filter(countrycode == "JPN") %>%
+  select(country, countrycode, year,
+         rgdpna, rnna, rkna, emp, avh, hc, labsh, rtfpna, delta) %>%
+  arrange(year)
+```
+
+```{r load-klems}
+get_klems <- function(path, sheet, var_name, total_code = "TOT") {
+  read_excel(path, sheet = sheet) %>%
+    filter(nace_r2_code == total_code) %>%
+    pivot_longer(cols = matches("^[0-9]{4}$"),
+                 names_to = "year", values_to = var_name) %>%
+    mutate(year = as.integer(year)) %>%
+    select(year, all_of(var_name))
+}
+
+f <- "JP_growth accounts.xlsx"
+
+jpn_klems <- list(
+  get_klems(f, "VA_G",          "VA_G"),
+  get_klems(f, "VAConTFP",      "VAConTFP"),
+  get_klems(f, "VAConH",        "VAConH"),
+  get_klems(f, "VAConLC",       "VAConLC"),
+  get_klems(f, "VAConTangICT",  "VAConTangICT"),
+  get_klems(f, "VAConTangNICT", "VAConTangNICT"),
+  get_klems(f, "VAConIntang",   "VAConIntang")
+) %>%
+  Reduce(function(a, b) full_join(a, b, by = "year"), .) %>%
+  arrange(year)
+```
+
+The aggregate analysis uses PWT 11.0, which covers Japan from 1950 to 2023 at
+the country level. Following the lecture (slides 35 and 36), the key variables
+are real GDP (`rgdpna`), capital services (`rkna`), persons engaged (`emp`), and
+the labor share (`labsh`). The extension uses the EU KLEMS growth accounts for
+Japan, which cover 1995 to 2021 and provide pre-computed contributions of hours,
+labor quality, three types of capital, and TFP.
+
+Three measurement points shape how the results should be read, and they are
+revisited in Section 4.4. First, in PWT 11.0 capital services (`rkna`) and the
+TFP index (`rtfpna`) are missing for 1950 to 1953, so any term that uses them
+effectively begins in 1954. Second, the labor share is held constant at about
+0.51 until 1970 before it starts to move, so the earliest decomposition leans on
+an assumed share. Third, because this release is PWT 11.0 while the lecture table
+used PWT 10.0, the numbers differ somewhat even though the pattern does not.
+
+# Growth Facts
+
+## Real GDP and GDP per worker
+
+```{r growth-facts-compute}
+facts <- jpn_pwt %>%
+  arrange(year) %>%
+  mutate(
+    gdp_pw   = rgdpna / emp,
+    g_gdp    = (rgdpna / lag(rgdpna) - 1) * 100,
+    g_gdp_pw = (gdp_pw / lag(gdp_pw) - 1) * 100
+  )
+```
+
+```{r fig-gdp-growth, fig.cap="Annual growth of real GDP and real GDP per worker, Japan (PWT 11.0)."}
+facts %>%
+  select(year, g_gdp, g_gdp_pw) %>%
+  pivot_longer(-year, names_to = "series", values_to = "growth") %>%
+  mutate(series = recode(series,
+                         g_gdp = "Real GDP",
+                         g_gdp_pw = "Real GDP per worker")) %>%
+  ggplot(aes(year, growth, color = series)) +
+  geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+  geom_line(linewidth = 0.7) +
+  labs(x = NULL, y = "Annual growth (%)", color = NULL) +
+  theme(legend.position = "bottom")
+```
+
+The figure shows the central fact of the Japanese economy. Growth rates that
+were extraordinarily high in the 1950s and 1960s, frequently above eight
+percent and peaking near thirteen percent in 1960, fall sharply after the early
+1970s and settle close to zero from the 1990s onward. Real GDP per worker tracks
+the headline series closely until the 1990s, then sits visibly below it. That
+gap is the first clue to the recent slowdown: total GDP and per-worker GDP
+diverge because the workforce stops growing and later shrinks, so part of the
+later weakness is demographic rather than productivity-based. The deep troughs
+at 2009 and 2020 mark the global financial crisis and the pandemic.
+
+## The labor income share
+
+```{r fig-labsh, fig.cap="Labor compensation share in GDP, Japan (PWT 11.0)."}
+jpn_pwt %>%
+  ggplot(aes(year, labsh)) +
+  geom_line(linewidth = 0.7, color = "#1f4e79") +
+  labs(x = NULL, y = "Labor share of GDP")
+```
+
+The labor share is reported as flat at about 0.508 until 1970, then rises
+quickly to around 0.62 by the mid-1970s, drifts down through the 1990s and
+2000s, and recovers after 2010. The sharp step around 1970 should be read with
+care. It reflects how PWT constructs the early series rather than a sudden real
+shift in how income was split between workers and capital, and it matters
+because growth accounting weights each input by its income share. Setting the
+artificial step aside, the broad picture is consistent with the balanced growth
+path of the Solow model and with the Kaldor facts discussed in class: the share
+stays within a fairly narrow band over the long run.
+
+## Economic events behind the patterns
+
+The growth facts line up with a familiar sequence of events. The years to 1973
+are the postwar miracle, supported by high savings, heavy investment, and the
+movement of workers out of agriculture into manufacturing. The 1973 and 1979 oil
+shocks hit an energy-importing economy hard and end the miracle. The 1985 Plaza
+Accord and the loose monetary policy that followed inflated an asset bubble in
+the late 1980s. Its collapse in 1991 opens the Lost Decade, which lingers through
+the deflation of the 2000s and the global financial crisis of 2008 and 2009. The
+Abenomics program from 2013 combines aggressive monetary easing, fiscal
+stimulus, and structural reform. The 2020 pandemic produces a sharp contraction
+and rebound at the very end of the sample.
+
+# Growth Accounting
+
+## Method
+
+We use the Solow decomposition in the notation of the lecture. Output growth is
+split into the contribution of capital, the contribution of labor, and a
+residual that measures TFP growth:
+$$
+\frac{\Delta Y_t}{Y_t}
+= \bar{s}^{K}_{t}\,\frac{\Delta K_t}{K_t}
++ \bar{s}^{L}_{t}\,\frac{\Delta L_t}{L_t}
++ \frac{\Delta A_t}{A_t}.
+$$
+Growth rates are simple period-over-period changes, for example
+$\Delta Y_t / Y_t = (Y_t - Y_{t-1})/Y_{t-1}$. The factor shares are time
+averages, $\bar{s}^{L}_{t} = (s^{L}_{t} + s^{L}_{t-1})/2$, and under constant
+returns with competitive pricing the capital share is
+$\bar{s}^{K}_{t} = 1 - \bar{s}^{L}_{t}$. Following the lecture, output is
+`rgdpna`, capital is capital services `rkna`, labor is persons engaged `emp`, and
+the labor share is `labsh`. The TFP term is the Solow residual, the part of
+output growth left unexplained by measured capital and labor.
+
+```{r ga-compute}
+ga <- jpn_pwt %>%
+  arrange(year) %>%
+  mutate(
+    g_Y    = rgdpna / lag(rgdpna) - 1,
+    g_K    = rkna   / lag(rkna)   - 1,
+    g_L    = emp    / lag(emp)    - 1,
+    sL_bar = (labsh + lag(labsh)) / 2,
+    sK_bar = 1 - sL_bar,
+    contrib_K = sK_bar * g_K,
+    contrib_L = sL_bar * g_L,
+    tfp       = g_Y - contrib_K - contrib_L
+  )
+```
+
+## Year-by-year decomposition
+
+```{r fig-decomp, fig.cap="Contributions to annual real GDP growth: capital, labor, and TFP. Bars sum to output growth (the black line)."}
+ga %>%
+  filter(year >= 1955) %>%
+  select(year, TFP = tfp, Capital = contrib_K, Labor = contrib_L, g_Y) %>%
+  pivot_longer(c(TFP, Capital, Labor),
+               names_to = "component", values_to = "contribution") %>%
+  ggplot() +
+  geom_col(aes(year, contribution * 100, fill = component), width = 0.9) +
+  geom_line(aes(year, g_Y * 100), linewidth = 0.5) +
+  geom_hline(yintercept = 0, color = "grey50", linewidth = 0.3) +
+  scale_fill_manual(values = c(TFP = "#c44e52",
+                               Capital = "#4c72b0",
+                               Labor = "#55a868")) +
+  labs(x = NULL, y = "Contribution to GDP growth (%)", fill = NULL) +
+  theme(legend.position = "bottom")
+```
+
+The figure makes the regime change visible. In the early decades all three
+components are large and positive, with capital doing the heaviest lifting. After
+1973 the bars shrink across the board. During the Lost Decade the TFP bars turn
+negative in several years, and what little growth remains is held up by capital.
+In the most recent years the bars are small in every color, which is the picture
+of a low-growth economy in which no single input is driving expansion.
+
+## Sub-period averages
+
+```{r ga-subperiod}
+ga <- ga %>%
+  mutate(period = case_when(
+    year > 1950 & year <= 1973 ~ "1950-1973",
+    year > 1973 & year <= 1983 ~ "1973-1983",
+    year > 1983 & year <= 1991 ~ "1983-1991",
+    year > 1991 & year <= 2000 ~ "1991-2000",
+    year > 2000 & year <= 2010 ~ "2000-2010",
+    year > 2010 & year <= 2019 ~ "2010-2019",
+    year > 2019 & year <= 2023 ~ "2019-2023",
+    TRUE ~ NA_character_
+  ))
+
+subperiod_tab <- ga %>%
+  filter(!is.na(period)) %>%
+  group_by(Period = period) %>%
+  summarise(
+    `Output growth` = mean(g_Y,       na.rm = TRUE) * 100,
+    `TFP`           = mean(tfp,       na.rm = TRUE) * 100,
+    `Capital`       = mean(contrib_K, na.rm = TRUE) * 100,
+    `Labor`         = mean(contrib_L, na.rm = TRUE) * 100,
+    .groups = "drop"
+  )
+```
+
+```{r tab-subperiod}
+kable(subperiod_tab, digits = 2, booktabs = TRUE,
+      caption = "Growth accounting for Japan, sub-period averages. Average annual growth rate (\\%). Source: PWT 11.0.")
+```
+
+This table is the heart of the project, and the story reads cleanly down the
+rows. The miracle period (1950 to 1973) combines a very large capital
+contribution of 5.42 points with strong TFP growth of 2.73, together producing
+output growth near nine percent. In the oil-shock decade (1973 to 1983) output
+growth more than halves to 3.50, and the fall is mostly in TFP, which collapses
+from 2.73 to 0.39 while capital stays substantial at 2.73. The bubble years
+(1983 to 1991) bring a partial TFP recovery to 1.67.
+
+The Lost Decade (1991 to 2000) is the pivotal row. TFP turns negative at minus
+0.66, so the only thing keeping output growth positive at 1.05 is residual
+capital accumulation of 1.74. In other words, firms kept investing into an
+economy whose productivity was actually falling. The 2000s (2000 to 2010)
+flatten everything: output growth of just 0.60, near-zero TFP, and a labor
+contribution that turns negative at minus 0.20 as the working-age population
+begins to shrink. The Abenomics years (2010 to 2019) show labor turning positive
+again at 0.40, helped by rising participation among women and older workers,
+while the capital contribution nearly disappears. The final pandemic sub-period
+(2019 to 2023), which the lecture table does not cover, shows the sharp 2020
+contraction with negative TFP of minus 0.24.
+
+The single clearest message is that Japan's great slowdown is primarily a TFP
+story. The capital contribution declines gradually and predictably as the
+capital-to-output ratio matures, but it is the swing in TFP, from plus 2.73 in
+the miracle to minus 0.66 in the Lost Decade, that accounts for most of the
+collapse in growth.
+
+## Data limitations
+
+Two limitations are worth noting. First, PWT 11.0 does not report capital
+services (`rkna`) or the TFP index (`rtfpna`) before 1954, so the capital and
+TFP averages for the 1950 to 1973 sub-period are computed from 1954 onward.
+This is why the components in that row do not sum exactly to output growth: the
+three terms are averaged over slightly different windows. Every other row
+reconciles to the second decimal.
+
+Second, the labor share is held constant at about 0.51 until 1970 in this
+release, so the earliest decomposition relies on an assumed share rather than
+measured data. The split between capital and labor in the first sub-period
+should therefore be read as indicative rather than precise.
+
+# Additional Analysis: Basic versus Extended TFP
+
+## Idea
+
+The decomposition above treats labor as a simple headcount and capital as a
+single index. The Jorgenson and Griliches measurement program, discussed in
+class, argues that much of what we call TFP is really unmeasured improvement in
+input quality. When we account for the rising education of workers and the shift
+toward more productive types of capital, the measured residual should shrink.
+
+We compare two residuals. The basic residual uses the capital stock (`rnna`) and
+headcount labor (`emp`). The extended residual is PWT's own `rtfpna`, which
+already quality-adjusts labor by hours and human capital and uses capital
+services. The gap between them is the part of measured TFP that is actually
+input quality.
+
+```{r basic-extended-compute}
+sens <- jpn_pwt %>%
+  arrange(year) %>%
+  mutate(
+    g_Y       = rgdpna / lag(rgdpna) - 1,
+    g_Kstock  = rnna   / lag(rnna)   - 1,
+    g_Lhead   = emp    / lag(emp)    - 1,
+    sL_bar    = (labsh + lag(labsh)) / 2,
+    sK_bar    = 1 - sL_bar,
+    tfp_basic = g_Y - sK_bar * g_Kstock - sL_bar * g_Lhead,
+    tfp_ext   = rtfpna / lag(rtfpna) - 1
+  ) %>%
+  mutate(period = case_when(
+    year > 1950 & year <= 1973 ~ "1950-1973",
+    year > 1973 & year <= 1983 ~ "1973-1983",
+    year > 1983 & year <= 1991 ~ "1983-1991",
+    year > 1991 & year <= 2000 ~ "1991-2000",
+    year > 2000 & year <= 2010 ~ "2000-2010",
+    year > 2010 & year <= 2019 ~ "2010-2019",
+    year > 2019 & year <= 2023 ~ "2019-2023",
+    TRUE ~ NA_character_
+  ))
+
+sens_tab <- sens %>%
+  filter(!is.na(period)) %>%
+  group_by(Period = period) %>%
+  summarise(
+    `Basic TFP`    = mean(tfp_basic, na.rm = TRUE) * 100,
+    `Extended TFP` = mean(tfp_ext,   na.rm = TRUE) * 100,
+    .groups = "drop"
+  ) %>%
+  mutate(`Difference` = `Basic TFP` - `Extended TFP`)
+```
+
+```{r tab-basic-extended}
+kable(sens_tab, digits = 2, booktabs = TRUE,
+      caption = "Basic versus extended TFP growth for Japan. Average annual growth rate (\\%). The difference is the part of measured TFP attributable to input quality. Source: PWT 11.0.")
+```
+
+The extended residual is smaller than the basic one in every sub-period, which
+is exactly the Jorgenson and Griliches result: once we credit the rising quality
+of labor and capital, less of growth looks like pure technical change. The
+difference is largest in the miracle period at 1.40 points, when education was
+expanding fast and the capital stock was being upgraded rapidly, and it narrows
+to near zero in the recent decades as those quality gains slow. This is a clean
+demonstration that measured TFP is, in part, a measure of our ignorance about
+input quality.
+
+# Additional Analysis: Capital Composition (EU KLEMS)
+
+## Idea
+
+PWT treats capital as one aggregate. EU KLEMS splits the capital contribution
+into three groups: information and communication technology (ICT), other
+tangible capital (non-ICT), and intangible capital such as software, research
+and development, and organizational capital. This lets us see how the
+composition of investment changed over Japan's recent decades.
+
+```{r fig-klems-capital, fig.cap="EU KLEMS contributions to value-added growth by capital type, labor quality, and TFP, Japan 1995-2021."}
+jpn_klems %>%
+  select(year,
+         `Labor quality` = VAConLC,
+         `ICT capital` = VAConTangICT,
+         `Non-ICT capital` = VAConTangNICT,
+         `Intangible capital` = VAConIntang,
+         `TFP` = VAConTFP) %>%
+  pivot_longer(-year, names_to = "component", values_to = "contribution") %>%
+  ggplot(aes(year, contribution, fill = component)) +
+  geom_col(width = 0.9) +
+  geom_hline(yintercept = 0, color = "grey50", linewidth = 0.3) +
+  scale_fill_manual(values = c(
+    "ICT capital"        = "#4c72b0",
+    "Non-ICT capital"    = "#8da0cb",
+    "Intangible capital" = "#c49a3f",
+    "Labor quality"      = "#55a868",
+    "TFP"                = "#c44e52"
+  )) +
+  labs(x = NULL, y = "Contribution to value-added growth (%)", fill = NULL) +
+  theme(legend.position = "bottom")
+```
+
+The EU KLEMS picture confirms and enriches the PWT story for the post-1995
+period. Intangible capital makes a small but steady positive contribution
+throughout, which a stock-only measure like PWT would miss entirely, and it is
+one of the few inputs that never turns negative. The TFP contribution is
+volatile and often negative around the Lost Decade and the financial crisis,
+which matches the negative residual found in the aggregate analysis and is a
+useful cross-check between two independent datasets. Labor quality keeps adding
+to growth even as the headcount stagnates, reflecting the continued upgrading of
+Japan's workforce through education and experience.
+
+# Conclusion
+
+Japan's growth history is a story of switching engines. In the miracle decades,
+capital accumulation and strong TFP growth drove output up at rates close to ten
+percent. The oil shocks ended the easy catch-up gains, and the bursting of the
+asset bubble in 1991 opened a long stagnation in which TFP growth turned
+negative and capital accumulation was the only thing holding growth above zero.
+The recent period shows a modest TFP recovery fighting against a shrinking
+workforce.
+
+The growth accounting exercise makes these transitions precise. Reproducing the
+lecture table with the newest PWT data confirms the pattern, and the slowdown is
+shown to be primarily a TFP phenomenon rather than a capital or labor one. The
+basic-versus-extended comparison shows that a meaningful share of measured TFP is
+really input quality, exactly as the Jorgenson and Griliches program predicts.
+The EU KLEMS extension adds the role of intangible capital and labor quality that
+an aggregate dataset cannot see, and independently reproduces the negative-TFP
+signature of the Lost Decade.
+
+# References
+
+Feenstra, R. C., Inklaar, R., and Timmer, M. P. (2015). The Next Generation of
+the Penn World Table. American Economic Review, 105(10), 3150-3182. PWT 11.0.
+
+Hulten, C. R. (1978). Growth Accounting with Intermediate Inputs. Review of
+Economic Studies, 45(3), 511-518.
+
+Jorgenson, D. W., and Griliches, Z. (1967). The Explanation of Productivity
+Change. Review of Economic Studies, 34(3), 249-283.
+
+Solow, R. M. (1957). Technical Change and the Aggregate Production Function.
+Review of Economics and Statistics, 39(3), 312-320.
+
+EU KLEMS and INTANProd (2023 release), Luiss Lab of European Economics.
