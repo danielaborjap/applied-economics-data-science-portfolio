@@ -47,3 +47,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# macOS / Python
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/
