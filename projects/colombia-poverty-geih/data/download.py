@@ -42,8 +42,9 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def unpack(zip_path: Path, dest: Path) -> None:
+def unpack(zip_path: Path, dest: Path, _nested: bool = False) -> None:
     dest.mkdir(parents=True, exist_ok=True)
+    before = set(dest.rglob("*.zip"))  # zips already there (e.g. the source zip) are never touched
     with zipfile.ZipFile(zip_path) as zf:
         for m in zf.infolist():
             target = (dest / m.filename).resolve()
@@ -51,14 +52,15 @@ def unpack(zip_path: Path, dest: Path) -> None:
                 raise RuntimeError(f"Unsafe path in zip: {m.filename}")
         zf.extractall(dest)
     # nested zips (DANE sometimes ships CSV.zip / SAV.zip inside)
-    for inner in list(dest.rglob("*.zip")):
-        unpack(inner, inner.with_suffix(""))
-        inner.unlink()
+    for inner in set(dest.rglob("*.zip")) - before - {zip_path.resolve(), zip_path}:
+        unpack(inner, inner.with_suffix(""), _nested=True)
+        inner.unlink()  # only zips that came out of the archive are removed
 
 
 def write_manifest(dest: Path) -> None:
     lines = [f"{sha256(p)}  {p.relative_to(dest)}"
-             for p in sorted(dest.rglob("*")) if p.is_file() and p.name != "MANIFEST.sha256"]
+             for p in sorted(dest.rglob("*"))
+             if p.is_file() and p.name not in {"MANIFEST.sha256", ".DS_Store"} and p.suffix != ".zip"]
     (dest / "MANIFEST.sha256").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 
