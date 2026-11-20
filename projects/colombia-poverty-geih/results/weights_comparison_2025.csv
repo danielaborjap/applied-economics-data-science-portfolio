@@ -1,0 +1,5 @@
+method,rate,gap_vs_official_pp
+"Unweighted, households (row mean)",24.198492044559146,-3.8015079554408544
+"Weighted, households (fex only)",22.34884570490187,-5.651154295098131
+"Unweighted, persons (npersug only)",29.954551161980902,1.954551161980902
+"Weighted, persons (fex × npersug)  ← official",28.04027650682895,0.04027650682894901

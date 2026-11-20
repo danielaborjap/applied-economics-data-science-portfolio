@@ -1,8 +1,8 @@
 # Replicating Colombia's official monetary poverty rate from GEIH microdata
 
-> **Status: work in progress.** Repo structure, data download script, loading notebook and
-> tested weighted-statistics functions are in place. Results tables below will be filled
-> in as each step is completed. No number is reported here until it is computed from the microdata.
+> **Status: work in progress.** The 2025 national, urban and rural poverty, extreme poverty and
+> Gini figures are replicated from the microdata (table below). Breakdowns by department and sex of
+> household head, a second year, and design-based standard errors are next.
 
 ## Question
 
@@ -41,24 +41,41 @@ Raw files are not committed (`data/` is gitignored).
   in `src/povcol/weighted.py` and unit-tested (equal-weight and replication-weight identities,
   pairwise mean-absolute-difference formula).
 
-## Replication targets (DANE, 2025 bulletin)
+## Replication (DANE 2025 bulletin vs. this repo)
 
-| Indicator | DANE 2024 | DANE 2025 | This repo 2025 |
+| Indicator (2025) | DANE | This repo | Difference |
 |---|---|---|---|
-| Monetary poverty, national (%) | 31.8 | 28.0 | _pending_ |
-| Monetary poverty, cabeceras (%) | 28.6 | 24.6 | _pending_ |
-| Monetary poverty, rural (%) | 42.5 | 39.5 | _pending_ |
-| Extreme poverty, national (%) | 11.7 | 9.6 | _pending_ |
-| Gini, national | 0.551 | 0.531 | _pending_ |
+| Monetary poverty, national (%) | 28.0 | 28.04 | +0.04 |
+| Monetary poverty, cabeceras (%) | 24.6 | 24.65 | +0.05 |
+| Monetary poverty, rural (%) | 39.5 | 39.51 | +0.01 |
+| Extreme poverty, national (%) | 9.6 | 9.65 | +0.05 |
+| Extreme poverty, cabeceras (%) | 6.9 | 6.86 | −0.04 |
+| Extreme poverty, rural (%) | 19.1 | 19.07 | −0.03 |
+| Gini, national | 0.531 | 0.530 | −0.001 |
+| Gini, cabeceras | 0.507 | 0.506 | −0.001 |
+| Gini, rural | 0.476 | 0.476 | 0.000 |
 
+All poverty rates are within ±0.1 pp of the official figures. Gini is ~0.001 below DANE's.
+Full table: [`results/replication_2025.csv`](results/replication_2025.csv); code: [`notebooks/02_replicate.ipynb`](notebooks/02_replicate.ipynb).
 Source: DANE, [Boletín técnico, Pobreza monetaria en Colombia, año 2025](https://www.dane.gov.co/files/operaciones/PM/bol-PM-2025.pdf) (12 June 2026).
-Target: within ±0.1 percentage points.
+
+### Why the weights matter
+
+![Four estimates of the 2025 poverty rate from the same microdata](figures/weights_comparison_2025.png)
+
+Computed naively from the same file, the poverty rate ranges from 22.3% to 30.0%. Two separate
+mistakes drive this: counting **households instead of persons** (poor households are larger) and
+**ignoring the expansion factors**. The GEIH deliberately oversamples small capital cities
+(Quibdó has 3.0% of the sample but 0.2% of the population) and undersamples rural areas
+(13.5% of sampled households vs. 22.8% of the population). Only the person-level weighted
+estimate (`fex_c × npersug`) reproduces the official 28.0%.
+
 
 ## Plan
 
 - [x] Repo, download script, data loading and sanity checks (`notebooks/01_load_data.ipynb`)
 - [x] Weighted quantile and Gini functions with tests (`src/povcol/weighted.py`)
-- [ ] Replicate national poverty, extreme poverty; weighted vs. unweighted comparison
+- [x] Replicate national poverty, extreme poverty and Gini; weighted vs. unweighted comparison (`notebooks/02_replicate.ipynb`)
 - [ ] Breakdowns: urban/rural, department, sex of household head; weighted Gini
 - [ ] Second year (2024 vs 2025) and design-based confidence intervals (`samplics`)
 - [ ] Charts and limitations
