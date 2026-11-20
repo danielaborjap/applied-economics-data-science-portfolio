@@ -1,0 +1,12 @@
+# R
+.Rhistory
+.RData
+.Rproj.user/
+.Ruserdata
+
+# Office temp/lock files
+~$*
+
+# OS
+.DS_Store
+Thumbs.db
