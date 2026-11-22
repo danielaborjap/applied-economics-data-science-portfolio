@@ -50,8 +50,8 @@ records SHA-256 checksums of every input. The loader harmonizes differences betw
   0.001–0.002 too low); `nper` reproduces every national figure and makes the household file's
   population equal the person file's exactly (51,590,081 in 2025).
 - **Expansion factors.** The GEIH oversamples the 23 capital cities and undersamples rural
-  areas by design; `fex_c` undoes this. Department figures use `fex_dpto`, which is calibrated
-  to departmental population projections.
+  areas (see the sampling ratios in `02_replicate.ipynb`); `fex_c` undoes this. Department
+  figures use DANE's separate departmental expansion factor `fex_dpto`.
 - **Merge.** Sex of the household head comes from `personas` (`p6050 == 1`) and is merged
   one-to-one onto `hogares` on `directorio` + `secuencia_p` (every household matched).
 - **Own implementations.** Weighted rate, weighted quantile, Gini (Lorenz-curve form) and a
