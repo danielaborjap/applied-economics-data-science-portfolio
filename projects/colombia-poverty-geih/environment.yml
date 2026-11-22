@@ -1,6 +1,0 @@
-name: povcol
-channels:
-  - defaults
-dependencies:
-  - python=3.11
-prefix: /opt/anaconda3/envs/povcol
