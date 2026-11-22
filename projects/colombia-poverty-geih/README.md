@@ -32,7 +32,7 @@ households, 784,910 persons). Two files per year: `hogares` (one row per househo
 | `lp`, `li` | poverty and extreme poverty lines (per capita, monthly; 50 domain-specific values) |
 | `pobre`, `indigente` | poor / extremely poor flags |
 | `nper` | persons in the household |
-| `npersug` | persons in the spending unit (household minus domestic workers, pensioners and their relatives) |
+| `npersug` | persons in the spending unit (household minus domestic workers, boarders — *pensionistas* — and their relatives) |
 | `fex_c` | expansion factor (national, urban/rural estimates) |
 | `fex_dpto` | departmental expansion factor (department estimates) |
 | `p3271`, `p6050` | sex; relationship to household head (in `personas`) |

@@ -22,7 +22,7 @@ md("""
 
 Definitions used (from DANE's methodology and the 2025 data dictionary):
 - income concept = per-capita income of the **spending unit** (*unidad de gasto*, UG: the household
-  minus domestic workers, pensioners and their relatives living in it)
+  minus domestic workers, boarders (*pensionistas*) and their relatives living in it)
 - unit of analysis = **all persons in the household**, each assigned the UG's per-capita income,
   so each household row represents `fex_c × nper` persons
   (weighting by `npersug` instead gives 28.05% / Gini 0.530; `nper` reproduces DANE exactly)
