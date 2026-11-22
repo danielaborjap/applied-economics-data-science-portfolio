@@ -47,3 +47,26 @@ def test_quantile_weights_equal_replication():
 def test_rate():
     assert weighted_rate([1, 0, 0, 0]) == 25.0
     assert weighted_rate([1, 0], [3, 1]) == 75.0
+
+
+def test_ratio_se_matches_srs_proportion():
+    # one person per unit, equal weights: SE must equal sqrt(p(1-p)/(n-1)) * ... the
+    # with-replacement SRS formula sqrt(p(1-p)/n) * sqrt(n/(n-1))
+    from povcol.weighted import ratio_se
+    rng = np.random.default_rng(3)
+    y = (rng.random(2000) < 0.3).astype(float)
+    R, se = ratio_se(y, np.ones_like(y), np.ones_like(y))
+    p = y.mean()
+    n = len(y)
+    assert abs(R - p) < 1e-12
+    assert abs(se - np.sqrt(p * (1 - p) / (n - 1))) < 1e-12
+
+
+def test_ratio_se_scale_invariant_in_weights():
+    from povcol.weighted import ratio_se
+    rng = np.random.default_rng(4)
+    x = rng.integers(1, 6, 500).astype(float)
+    y = np.minimum(x, rng.integers(0, 4, 500))
+    w = rng.uniform(10, 500, 500)
+    s = rng.integers(0, 5, 500)
+    assert np.allclose(ratio_se(y, x, w, s), ratio_se(y, x, 7 * w, s))

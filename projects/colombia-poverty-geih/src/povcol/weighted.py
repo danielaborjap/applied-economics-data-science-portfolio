@@ -71,3 +71,31 @@ def gini(x, w=None) -> float:
     L = np.cumsum(income) / income.sum()
     L_prev = np.concatenate(([0.0], L[:-1]))
     return float(1.0 - np.sum(p * (L + L_prev)))
+
+
+def ratio_se(y, x, w, strata=None) -> tuple[float, float]:
+    """Ratio estimate R = sum(w*y) / sum(w*x) and its linearized standard error.
+
+    Taylor linearization with households as the sampling units and optional strata,
+    using the with-replacement variance formula within each stratum:
+        z_i = w_i (y_i - R x_i) / sum(w x)
+        V(R) = sum_h n_h/(n_h-1) * sum_i (z_hi - zbar_h)^2
+
+    For poverty: y = poor persons in the household (pobre * nper), x = persons (nper),
+    w = expansion factor. NOTE: the public GEIH file has no PSU/cluster identifiers,
+    so this ignores clustering and will usually UNDERSTATE the true standard error.
+    """
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    w = np.asarray(w, dtype=float)
+    X = np.sum(w * x)
+    R = np.sum(w * y) / X
+    z = w * (y - R * x) / X
+    strata = np.zeros(len(z), dtype=int) if strata is None else np.asarray(strata)
+    var = 0.0
+    for h in np.unique(strata):
+        zh = z[strata == h]
+        n = len(zh)
+        if n > 1:
+            var += n / (n - 1) * np.sum((zh - zh.mean()) ** 2)
+    return float(R), float(np.sqrt(var))

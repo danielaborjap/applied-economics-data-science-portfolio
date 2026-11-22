@@ -54,7 +54,7 @@ for name, df in [("hogares", hog), ("personas", per)]:
 """)
 
 code("""
-needed = ["fex", "ingpcug", "lp", "li", "pobre", "indigente", "npersug", "clase", "dpto"]
+needed = ["fex", "ingpcug", "lp", "li", "pobre", "indigente", "npersug", "nper", "clase", "dpto"]
 missing = [c for c in needed if c not in hog.columns]
 print("Missing in hogares:", missing or "none")
 hog[[c for c in needed if c in hog.columns]].describe().T
@@ -70,6 +70,7 @@ print(f"Duplicate household keys: {dups}")
 # Expansion factors should sum to ~ number of households;
 # fex * persons in spending unit should sum to ~ national population (~53 million)
 print(f"Sum fex (households):            {hog['fex'].sum():,.0f}")
+print(f"Sum fex*nper (all persons):      {(hog['fex'] * hog['nper']).sum():,.0f}")
 print(f"Sum fex*npersug (persons in UG): {(hog['fex'] * hog['npersug']).sum():,.0f}")
 if "fex" in per.columns:
     print(f"Sum fex over personas file:      {per['fex'].sum():,.0f}")
@@ -93,11 +94,12 @@ md("""
 ## 3. First look (preliminary, not the replication)
 
 Poverty incidence is a share of **persons**, but `hogares` has one row per household.
-So each household is weighted by `fex × npersug` (persons in the spending unit).
+So each household is weighted by `fex × nper` (all persons in the household; each is assigned
+the spending unit's per-capita income).
 """)
 
 code("""
-w_person = hog["fex"] * hog["npersug"]
+w_person = hog["fex"] * hog["nper"]
 print(f"Weighted (persons):   {weighted_rate(hog['pobre'], w_person):.2f}%   official 28.0%")
 print(f"Weighted (households):{weighted_rate(hog['pobre'], hog['fex']):.2f}%")
 print(f"Unweighted rows:      {weighted_rate(hog['pobre']):.2f}%")

@@ -18,11 +18,14 @@ md("""
 # 02 · Replicate DANE's 2025 monetary poverty and Gini
 
 **Question:** starting from the microdata, do we get DANE's published 2025 figures?
-**Target:** within ±0.1 percentage points (poverty) and ±0.001 (Gini).
+**Target:** each estimate rounds to DANE's published value (1 decimal for rates, 3 for Gini).
 
 Definitions used (from DANE's methodology and the 2025 data dictionary):
-- unit of analysis = **persons in the spending unit** (*unidad de gasto*, UG)
-- each household row represents `fex_c × npersug` persons
+- income concept = per-capita income of the **spending unit** (*unidad de gasto*, UG: the household
+  minus domestic workers, pensioners and their relatives living in it)
+- unit of analysis = **all persons in the household**, each assigned the UG's per-capita income,
+  so each household row represents `fex_c × nper` persons
+  (weighting by `npersug` instead gives 28.05% / Gini 0.530; `nper` reproduces DANE exactly)
 - `pobre` = 1 if `ingpcug < lp`; `indigente` = 1 if `ingpcug < li` (lines vary across 50 domains)
 - `clase` 1 = cabeceras (urban), 2 = centros poblados y rural disperso
 """)
@@ -47,7 +50,7 @@ RESULTS = ROOT / "results"; RESULTS.mkdir(exist_ok=True)
 FIGS = ROOT / "figures"; FIGS.mkdir(exist_ok=True)
 
 hog = load(YEAR, "hogares")
-hog["w_person"] = hog["fex"] * hog["npersug"]
+hog["w_person"] = hog["fex"] * hog["nper"]
 DOMAINS = {"nacional": hog, "cabeceras": hog[hog["clase"] == 1], "rural": hog[hog["clase"] == 2]}
 """)
 
@@ -72,9 +75,9 @@ for dom, d in DOMAINS.items():
 
 rep = pd.DataFrame(rows)
 rep["difference"] = rep["this_repo"] - rep["DANE"]
-rep["within_target"] = np.where(rep["indicator"] == "Gini",
-                                rep["difference"].abs() <= 0.0015,
-                                rep["difference"].abs() <= 0.1)
+rep["rounds_to_DANE"] = np.where(rep["indicator"] == "Gini",
+                                 rep["this_repo"].round(3) == rep["DANE"],
+                                 rep["this_repo"].round(1) == rep["DANE"])
 rep.to_csv(RESULTS / "replication_2025.csv", index=False)
 rep.round(3)
 """)
@@ -107,13 +110,13 @@ methods = pd.DataFrame({
     "method": [
         "Unweighted, households (row mean)",
         "Weighted, households (fex only)",
-        "Unweighted, persons (npersug only)",
-        "Weighted, persons (fex × npersug)  ← official",
+        "Unweighted, persons (nper only)",
+        "Weighted, persons (fex × nper)  ← official",
     ],
     "rate": [
         weighted_rate(d["pobre"]),
         weighted_rate(d["pobre"], d["fex"]),
-        weighted_rate(d["pobre"], d["npersug"]),
+        weighted_rate(d["pobre"], d["nper"]),
         weighted_rate(d["pobre"], d["w_person"]),
     ],
 })
@@ -169,11 +172,12 @@ plt.show()
 md("""
 ## 4. Notes for the write-up
 
-- National poverty and the urban/rural breakdowns replicate DANE within the target.
-- Extreme poverty: our estimate rounds to 9.7 while DANE publishes 9.6; the gap (≈0.05 pp) is
-  within the ±0.1 target. Record it rather than hide it.
-- Gini comes out ≈0.001 below DANE's figures, consistent with a small difference in the
-  Gini formula or weighting convention; check DANE's methodology note before claiming an exact match.
+- All nine figures (poverty, extreme poverty, Gini × national/urban/rural) round to DANE's
+  published values.
+- **Getting the unit exactly right mattered.** Weighting households by persons in the spending
+  unit (`npersug`) gives 28.05% poverty, 9.65% extreme poverty (rounds to 9.7, not DANE's 9.6) and a
+  Gini 0.001–0.002 too low. Weighting by all household members (`nper`) — each assigned the
+  spending unit's per-capita income — reproduces every published figure.
 """)
 
 nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python (povcol)", "language": "python", "name": "povcol"},
