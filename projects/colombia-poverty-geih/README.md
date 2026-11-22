@@ -21,9 +21,10 @@ a statistically significant decline of 3.8 points.
 ## Data
 
 DANE, *Medición de Pobreza Monetaria y Desigualdad*, built on the Gran Encuesta Integrada de
-Hogares (GEIH): [2025](https://microdatos.dane.gov.co/index.php/catalog/908) (276,666 households,
-773,932 persons) and [2024](https://microdatos.dane.gov.co/index.php/catalog/874) (275,057
-households, 784,910 persons). Two files per year: `hogares` (one row per household) and
+Hogares (GEIH): [2025](https://microdatos.dane.gov.co/index.php/catalog/908/get-microdata) (276,666 households,
+773,932 persons) and [2024](https://microdatos.dane.gov.co/index.php/catalog/874/get-microdata) (275,057
+households, 784,910 persons). Download the main `BDatos-Pobreza_Monetaria_Desigualdad-<year>`
+file (free registration required). Two files per year: `hogares` (one row per household) and
 `personas` (one row per person).
 
 | Variable | Meaning |

@@ -29,8 +29,8 @@ HERE = Path(__file__).resolve().parent
 RAW = HERE / "raw"
 
 CATALOG = {
-    2025: "https://microdatos.dane.gov.co/index.php/catalog/908",
-    2024: "https://microdatos.dane.gov.co/index.php/catalog/874",
+    2025: "https://microdatos.dane.gov.co/index.php/catalog/908/get-microdata",
+    2024: "https://microdatos.dane.gov.co/index.php/catalog/874/get-microdata",
 }
 
 
